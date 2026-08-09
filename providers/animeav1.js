@@ -770,13 +770,9 @@ function _asyncToGenerator(n) { return function () { var t = this, e = arguments
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __commonJS = function __commonJS(cb, mod) {
   return function __require() {
-    try {
-      return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = {
-        exports: {}
-      }).exports, mod), mod.exports;
-    } catch (e) {
-      throw mod = 0, e;
-    }
+    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = {
+      exports: {}
+    }).exports, mod), mod.exports;
   };
 };
 
@@ -14354,6 +14350,7 @@ var cheerio = require_cheerio_without_node_native();
 var ANIMEAV1_BASE = "https://animeav1.com";
 var TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
 var UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+var SOURCE_EXTRACTORS = {};
 function getTMDBInfo(_x, _x2) {
   return _getTMDBInfo.apply(this, arguments);
 }
@@ -14464,7 +14461,7 @@ function _searchAnimeAV() {
       while (1) switch (_context6.p = _context6.n) {
         case 0:
           runSearch = /*#__PURE__*/function () {
-            var _runSearch = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee5(searchQuery) {
+            var _ref3 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee5(searchQuery) {
               var _a, searchURL, data;
               return _regenerator().w(function (_context5) {
                 while (1) switch (_context5.n) {
@@ -14485,10 +14482,9 @@ function _searchAnimeAV() {
                 }
               }, _callee5);
             }));
-            function runSearch(_x12) {
-              return _runSearch.apply(this, arguments);
-            }
-            return runSearch;
+            return function runSearch(_x12) {
+              return _ref3.apply(this, arguments);
+            };
           }();
           _context6.p = 1;
           _context6.n = 2;
@@ -14571,7 +14567,7 @@ function getEpisodeServers(_x6, _x7) {
 }
 function _getEpisodeServers() {
   _getEpisodeServers = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee7(slug, epNumber) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, ep, pageUrl, resolveServer2, extractServers2, resolveServer, extractServers, jsonUrl, resp, root, nodes, dataArray, _iterator2, _step2, node, hasEmbeds, episodeObj, embedsIndex, embeds, servers, subIndex, dubIndex, downloadsIndex, downloads, dlSubIndex, dlDubIndex, html, $, scripts, metadataJSON, serversObj, serversObjDUB, downloadObj, downloadObjDUB, raw, _servers, _t6, _t7, _t8;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, ep, pageUrl, resolveServer2, matchesSupportedSource2, extractServers2, resolveServer, matchesSupportedSource, extractServers, jsonUrl, resp, root, nodes, dataArray, _iterator2, _step2, node, hasEmbeds, episodeObj, embedsIndex, embeds, servers, subIndex, dubIndex, downloadsIndex, downloads, dlSubIndex, dlDubIndex, html, $, scripts, metadataJSON, serversObj, serversObjDUB, downloadObj, downloadObjDUB, raw, _servers, _t6, _t7, _t8;
     return _regenerator().w(function (_context7) {
       while (1) switch (_context7.p = _context7.n) {
         case 0:
@@ -14593,6 +14589,10 @@ function _getEpisodeServers() {
             } catch (_) {
               return null;
             }
+          }, matchesSupportedSource2 = function matchesSupportedSource2(name) {
+            return Object.keys(SOURCE_EXTRACTORS).some(function (key) {
+              return name.includes(key);
+            });
           }, extractServers2 = function extractServers2(listIndex, dub) {
             var list = dataArray[listIndex];
             if (!Array.isArray(list)) return;
@@ -14603,7 +14603,7 @@ function _getEpisodeServers() {
                 var objIndex = _step.value;
                 var server = resolveServer2(objIndex);
                 if (!server || !server.url.startsWith("http")) continue;
-                if (!server.name.includes("MP4Upload")) continue;
+                if (!matchesSupportedSource2(server.name)) continue;
                 servers.push({
                   name: server.name,
                   url: server.url,
@@ -14616,7 +14616,7 @@ function _getEpisodeServers() {
               _iterator.f();
             }
           };
-          resolveServer = resolveServer2, extractServers = extractServers2;
+          resolveServer = resolveServer2, matchesSupportedSource = matchesSupportedSource2, extractServers = extractServers2;
           jsonUrl = `${pageUrl}/__data.json`;
           _context7.n = 2;
           return fetch(jsonUrl, {
@@ -14724,10 +14724,10 @@ function _getEpisodeServers() {
             _context7.n = 16;
             break;
           }
-          console.log(`[AnimeAV1] __data.json OK: ${servers.length} servidores MP4Upload`);
+          console.log(`[AnimeAV1] __data.json OK: ${servers.length} servidores soportados`);
           return _context7.a(2, servers);
         case 16:
-          throw Error("__data.json returned 0 MP4Upload servers, falling back");
+          throw Error("__data.json returned 0 servidores soportados, falling back");
         case 17:
           _context7.p = 17;
           _t7 = _context7.v;
@@ -14790,8 +14790,9 @@ function _getEpisodeServers() {
             };
           }));
           _servers = raw.filter(function (s) {
-            var _a2;
-            return ((_a2 = s.title) == null ? void 0 : _a2.includes("MP4Upload")) && s.code;
+            return s.title && Object.keys(SOURCE_EXTRACTORS).some(function (key) {
+              return s.title.includes(key);
+            }) && s.code;
           }).map(function (s) {
             return {
               name: s.title,
@@ -14799,7 +14800,7 @@ function _getEpisodeServers() {
               dub: s.dub
             };
           });
-          console.log(`[AnimeAV1] HTML scraping OK: ${_servers.length} servidores MP4Upload`);
+          console.log(`[AnimeAV1] HTML scraping OK: ${_servers.length} servidores soportados`);
           return _context7.a(2, _servers);
         case 20:
           _context7.p = 20;
@@ -14811,11 +14812,11 @@ function _getEpisodeServers() {
   }));
   return _getEpisodeServers.apply(this, arguments);
 }
-function getMP4UploadLink(_x8) {
-  return _getMP4UploadLink.apply(this, arguments);
+function extractMP4Upload(_x8) {
+  return _extractMP4Upload.apply(this, arguments);
 }
-function _getMP4UploadLink() {
-  _getMP4UploadLink = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee8(embedUrl) {
+function _extractMP4Upload() {
+  _extractMP4Upload = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee8(embedUrl) {
     var origin, resp, data, match;
     return _regenerator().w(function (_context8) {
       while (1) switch (_context8.n) {
@@ -14855,18 +14856,32 @@ function _getMP4UploadLink() {
           throw Error("No se encontr\xF3 URL .mp4 en el embed de MP4Upload");
         case 4:
           console.log(`[MP4Upload] URL extra\xEDda: ${match[1]}`);
-          return _context8.a(2, match[1]);
+          return _context8.a(2, {
+            url: match[1],
+            headers: {
+              Referer: "https://www.mp4upload.com",
+              Origin: "https://www.mp4upload.com",
+              "User-Agent": UA
+            }
+          });
       }
     }, _callee8);
   }));
-  return _getMP4UploadLink.apply(this, arguments);
+  return _extractMP4Upload.apply(this, arguments);
 }
-var LANG_LABEL = function LANG_LABEL(dub) {
+Object.assign(SOURCE_EXTRACTORS, {
+  MP4Upload: {
+    label: "MP4Upload",
+    extract: extractMP4Upload
+  }
+  // UPNShare: { label: "UPNShare", extract: extractUPNShare }, // pendiente: confirmar nombre exacto y patrón de embed
+});
+var getLangLabel = function getLangLabel(dub) {
   return dub ? "\u{1F1F2}\u{1F1FD} LATINO" : "\u{1F1EF}\u{1F1F5} JAPON\xC9S \xB7 \u{1F1F2}\u{1F1FD} Sub";
 };
 exports.getStreams = /*#__PURE__*/function () {
   var _ref = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee2(tmdbId, type, season, episode) {
-    var info, candidates, match, epNumber, mp4Servers, results, final, _t2;
+    var info, candidates, match, epNumber, servers, results, final, _t2;
     return _regenerator().w(function (_context2) {
       while (1) switch (_context2.p = _context2.n) {
         case 0:
@@ -14898,8 +14913,8 @@ exports.getStreams = /*#__PURE__*/function () {
           _context2.n = 6;
           return getEpisodeServers(match.slug, epNumber);
         case 6:
-          mp4Servers = _context2.v;
-          if (!(mp4Servers.length === 0 && type === "movie" && epNumber === 1)) {
+          servers = _context2.v;
+          if (!(servers.length === 0 && type === "movie" && epNumber === 1)) {
             _context2.n = 8;
             break;
           }
@@ -14907,47 +14922,52 @@ exports.getStreams = /*#__PURE__*/function () {
           _context2.n = 7;
           return getEpisodeServers(match.slug, 0);
         case 7:
-          mp4Servers = _context2.v;
+          servers = _context2.v;
         case 8:
-          if (!(mp4Servers.length === 0)) {
+          if (!(servers.length === 0)) {
             _context2.n = 9;
             break;
           }
-          console.warn(`[AnimeAV1] Sin servidores MP4Upload para "${match.title}"`);
+          console.warn(`[AnimeAV1] Sin servidores soportados para "${match.title}"`);
           return _context2.a(2, []);
         case 9:
           _context2.n = 10;
-          return Promise.all(mp4Servers.map(/*#__PURE__*/function () {
+          return Promise.all(servers.map(/*#__PURE__*/function () {
             var _ref2 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee(server) {
-              var directUrl, tipo, _t;
+              var sourceKey, source, resolved, _t;
               return _regenerator().w(function (_context) {
                 while (1) switch (_context.p = _context.n) {
                   case 0:
-                    _context.p = 0;
-                    _context.n = 1;
-                    return getMP4UploadLink(server.url);
-                  case 1:
-                    directUrl = _context.v;
-                    tipo = type === "movie" ? "Pel\xEDcula" : "Serie";
-                    return _context.a(2, {
-                      name: "AnimeAV1",
-                      title: `\u{1F4FA} MP4 | WEB-DL | ${tipo}
-${LANG_LABEL(server.dub)}`,
-                      url: directUrl,
-                      quality: "1080p",
-                      headers: {
-                        Referer: "https://www.mp4upload.com",
-                        Origin: "https://www.mp4upload.com",
-                        "User-Agent": UA
-                      }
+                    sourceKey = Object.keys(SOURCE_EXTRACTORS).find(function (key) {
+                      return server.name.includes(key);
                     });
+                    source = sourceKey ? SOURCE_EXTRACTORS[sourceKey] : null;
+                    if (source) {
+                      _context.n = 1;
+                      break;
+                    }
+                    return _context.a(2, null);
+                  case 1:
+                    _context.p = 1;
+                    _context.n = 2;
+                    return source.extract(server.url);
                   case 2:
-                    _context.p = 2;
+                    resolved = _context.v;
+                    return _context.a(2, {
+                      name: `AnimeAV1`,
+                      title: `\u{1F4FA} ${source.label} | 1080p | WEB-DL |
+${getLangLabel(server.dub)}`,
+                      url: resolved.url,
+                      quality: "1080p",
+                      headers: resolved.headers
+                    });
+                  case 3:
+                    _context.p = 3;
                     _t = _context.v;
-                    console.warn(`[MP4Upload] Fall\xF3 resolviendo un servidor: ${_t.message}`);
+                    console.warn(`[${source.label}] Fall\xF3 resolviendo un servidor: ${_t.message}`);
                     return _context.a(2, null);
                 }
-              }, _callee, null, [[0, 2]]);
+              }, _callee, null, [[1, 3]]);
             }));
             return function (_x11) {
               return _ref2.apply(this, arguments);

@@ -11,6 +11,11 @@ const ANIMEAV1_BASE = "https://animeav1.com"
 const TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c" // misma key pública usada en PeliSeriesHoy
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
+// Servidores soportados: nombre tal como aparece en el HTML/__data.json de
+// AnimeAV1 -> función extractora que resuelve el link directo reproducible.
+// Para sumar un nuevo source: 1) agregar su extractor más abajo, 2) agregarlo aquí.
+const SOURCE_EXTRACTORS = {} // se completa al final del archivo, una vez definidos los extractores
+
 // ─────────────────────────────────────────────
 // TMDB → título de búsqueda
 // ─────────────────────────────────────────────
@@ -191,13 +196,17 @@ async function getEpisodeServers(slug, epNumber) {
       } catch (_) { return null }
     }
 
+    function matchesSupportedSource(name) {
+      return Object.keys(SOURCE_EXTRACTORS).some((key) => name.includes(key))
+    }
+
     function extractServers(listIndex, dub) {
       const list = dataArray[listIndex]
       if (!Array.isArray(list)) return
       for (const objIndex of list) {
         const server = resolveServer(objIndex)
         if (!server || !server.url.startsWith('http')) continue
-        if (!server.name.includes('MP4Upload')) continue // ── solo MP4Upload ──
+        if (!matchesSupportedSource(server.name)) continue // ── solo sources soportados ──
         servers.push({ name: server.name, url: server.url, dub })
       }
     }
@@ -207,7 +216,7 @@ async function getEpisodeServers(slug, epNumber) {
     if (subIndex >= 0) extractServers(subIndex, false)
     if (dubIndex >= 0) extractServers(dubIndex, true)
 
-    // Algunos episodios exponen MP4Upload como "download" en vez de "embed"
+    // Algunos episodios exponen sources como "download" en vez de "embed"
     const downloadsIndex = episodeObj.downloads
     if (downloadsIndex !== undefined) {
       const downloads = dataArray[downloadsIndex]
@@ -220,10 +229,10 @@ async function getEpisodeServers(slug, epNumber) {
     }
 
     if (servers.length > 0) {
-      console.log(`[AnimeAV1] __data.json OK: ${servers.length} servidores MP4Upload`)
+      console.log(`[AnimeAV1] __data.json OK: ${servers.length} servidores soportados`)
       return servers
     }
-    throw Error("__data.json returned 0 MP4Upload servers, falling back")
+    throw Error("__data.json returned 0 servidores soportados, falling back")
 
   } catch (e) {
     console.warn(`[AnimeAV1] __data.json falló (${e.message}), probando HTML scraping`)
@@ -251,10 +260,10 @@ async function getEpisodeServers(slug, epNumber) {
     if (downloadObjDUB) raw = raw.concat(downloadObjDUB.split("},").map(s => ({ title: s.match(/server:\s?"(.*?)"/)?.[1], code: s.match(/url:\s?"(.*?)"/)?.[1], dub: true })))
 
     const servers = raw
-      .filter(s => s.title?.includes('MP4Upload') && s.code)
+      .filter(s => s.title && Object.keys(SOURCE_EXTRACTORS).some((key) => s.title.includes(key)) && s.code)
       .map(s => ({ name: s.title, url: s.code, dub: s.dub }))
 
-    console.log(`[AnimeAV1] HTML scraping OK: ${servers.length} servidores MP4Upload`)
+    console.log(`[AnimeAV1] HTML scraping OK: ${servers.length} servidores soportados`)
     return servers
   } catch (e) {
     console.error("[AnimeAV1] Error en fallback HTML:", e.message)
@@ -263,14 +272,16 @@ async function getEpisodeServers(slug, epNumber) {
 }
 
 // ─────────────────────────────────────────────
-// Resolución del link directo .mp4 desde el embed de MP4Upload
+// Extractores por source: cada uno recibe la URL de embed/download que
+// devolvió AnimeAV1 y resuelve el link directo reproducible + sus headers.
+// Cada extractor devuelve { url, headers }.
 // ─────────────────────────────────────────────
 
 /**
- * Dado un embed de MP4Upload (https://www.mp4upload.com/embed-xxxx.html),
- * extrae la URL directa del .mp4 parseando el script inline del reproductor.
+ * MP4Upload (https://www.mp4upload.com/embed-xxxx.html)
+ * Extrae la URL directa del .mp4 parseando el script inline del reproductor.
  */
-async function getMP4UploadLink(embedUrl) {
+async function extractMP4Upload(embedUrl) {
   const origin = (() => { try { return new URL(embedUrl).origin } catch (_) { return "https://www.mp4upload.com" } })()
   const resp = await fetch(embedUrl, {
     headers: {
@@ -284,14 +295,24 @@ async function getMP4UploadLink(embedUrl) {
   const match = /<script(?:.|\n)+?src:(?:.|\n)*?"(.+?\.mp4)"/g.exec(data)
   if (!match || !match[1]) throw Error("No se encontró URL .mp4 en el embed de MP4Upload")
   console.log(`[MP4Upload] URL extraída: ${match[1]}`)
-  return match[1]
+  return {
+    url: match[1],
+    headers: { Referer: "https://www.mp4upload.com", Origin: "https://www.mp4upload.com", "User-Agent": UA }
+  }
 }
+
+// Registro de sources soportados: nombre (tal como aparece en AnimeAV1) -> { label, extract }
+// Para sumar un nuevo source: escribir su función extract(url) -> {url, headers}, y agregarlo aquí.
+Object.assign(SOURCE_EXTRACTORS, {
+  MP4Upload: { label: "MP4Upload", extract: extractMP4Upload }
+  // UPNShare: { label: "UPNShare", extract: extractUPNShare }, // pendiente: confirmar nombre exacto y patrón de embed
+})
 
 // ─────────────────────────────────────────────
 // Entry point — contrato Nuvio
 // ─────────────────────────────────────────────
 
-const LANG_LABEL = (dub) => dub ? "🇲🇽 LATINO" : "🇯🇵 JAPONÉS · 🇲🇽 Sub"
+const getLangLabel = (dub) => dub ? "🇲🇽 LATINO" : "🇯🇵 JAPONÉS · 🇲🇽 Sub"
 
 /**
  * @param {string|number} tmdbId
@@ -313,36 +334,35 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
     console.log(`[AnimeAV1] Match elegido: "${match.title}" (${match.slug})`)
 
     const epNumber = type === "movie" ? 1 : (episode !== undefined ? Number(episode) : 1)
-    let mp4Servers = await getEpisodeServers(match.slug, epNumber)
+    let servers = await getEpisodeServers(match.slug, epNumber)
 
     // Fallback película: algunas están indexadas como episodio 0
-    if (mp4Servers.length === 0 && type === "movie" && epNumber === 1) {
+    if (servers.length === 0 && type === "movie" && epNumber === 1) {
       console.warn(`[AnimeAV1] Reintentando película con episodio 0`)
-      mp4Servers = await getEpisodeServers(match.slug, 0)
+      servers = await getEpisodeServers(match.slug, 0)
     }
 
-    if (mp4Servers.length === 0) {
-      console.warn(`[AnimeAV1] Sin servidores MP4Upload para "${match.title}"`)
+    if (servers.length === 0) {
+      console.warn(`[AnimeAV1] Sin servidores soportados para "${match.title}"`)
       return []
     }
 
-    const results = await Promise.all(mp4Servers.map(async (server) => {
+    const results = await Promise.all(servers.map(async (server) => {
+      const sourceKey = Object.keys(SOURCE_EXTRACTORS).find((key) => server.name.includes(key))
+      const source = sourceKey ? SOURCE_EXTRACTORS[sourceKey] : null
+      if (!source) return null
+
       try {
-        const directUrl = await getMP4UploadLink(server.url)
-        const tipo = type === "movie" ? "Película" : "Serie"
+        const resolved = await source.extract(server.url)
         return {
-          name: "AnimeAV1",
-          title: `📺 MP4 | WEB-DL | ${tipo}\n${LANG_LABEL(server.dub)}`,
-          url: directUrl,
+          name: `AnimeAV1`,
+          title: `📺 ${source.label} | 1080p | WEB-DL |\n${getLangLabel(server.dub)}`,
+          url: resolved.url,
           quality: "1080p",
-          headers: {
-            Referer: "https://www.mp4upload.com",
-            Origin: "https://www.mp4upload.com",
-            "User-Agent": UA
-          }
+          headers: resolved.headers
         }
       } catch (e) {
-        console.warn(`[MP4Upload] Falló resolviendo un servidor: ${e.message}`)
+        console.warn(`[${source.label}] Falló resolviendo un servidor: ${e.message}`)
         return null
       }
     }))
