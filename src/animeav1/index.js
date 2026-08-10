@@ -301,11 +301,32 @@ async function extractMP4Upload(embedUrl) {
   }
 }
 
+/**
+ * UPNShare (https://animeav1.uns.bio/#<hash>)
+ * El hash tras el # es el `id` que la API de UPNShare usa para servir el
+ * video directo en /api/v1/video. No requiere parsear HTML: solo hace falta
+ * reescribir la URL y mandar el Referer correcto (dominio raíz de uns.bio).
+ */
+async function extractUPNShare(embedUrl) {
+  const url = new URL(embedUrl)
+  const hash = url.hash?.replace(/^#/, '')
+  if (!hash) throw Error("No se pudo extraer el ID (hash) del embed de UPNShare")
+
+  const origin = url.origin // ej: https://animeav1.uns.bio
+  const directUrl = `${origin}/api/v1/video?id=${encodeURIComponent(hash)}&w=1920&h=1080&r=`
+
+  console.log(`[UPNShare] URL construida: ${directUrl}`)
+  return {
+    url: directUrl,
+    headers: { Referer: `${origin}/`, "User-Agent": UA }
+  }
+}
+
 // Registro de sources soportados: nombre (tal como aparece en AnimeAV1) -> { label, extract }
 // Para sumar un nuevo source: escribir su función extract(url) -> {url, headers}, y agregarlo aquí.
 Object.assign(SOURCE_EXTRACTORS, {
-  MP4Upload: { label: "MP4Upload", extract: extractMP4Upload }
-  // UPNShare: { label: "UPNShare", extract: extractUPNShare }, // pendiente: confirmar nombre exacto y patrón de embed
+  MP4Upload: { label: "MP4Upload", extract: extractMP4Upload },
+  UPNShare: { label: "UPNShare", extract: extractUPNShare }
 })
 
 // ─────────────────────────────────────────────

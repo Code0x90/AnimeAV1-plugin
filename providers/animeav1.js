@@ -14482,7 +14482,7 @@ function _searchAnimeAV() {
                 }
               }, _callee5);
             }));
-            return function runSearch(_x12) {
+            return function runSearch(_x13) {
               return _ref3.apply(this, arguments);
             };
           }();
@@ -14869,12 +14869,47 @@ function _extractMP4Upload() {
   }));
   return _extractMP4Upload.apply(this, arguments);
 }
+function extractUPNShare(_x9) {
+  return _extractUPNShare.apply(this, arguments);
+}
+function _extractUPNShare() {
+  _extractUPNShare = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee9(embedUrl) {
+    var _a, url, hash, origin, directUrl;
+    return _regenerator().w(function (_context9) {
+      while (1) switch (_context9.n) {
+        case 0:
+          url = new URL(embedUrl);
+          hash = (_a = url.hash) == null ? void 0 : _a.replace(/^#/, "");
+          if (hash) {
+            _context9.n = 1;
+            break;
+          }
+          throw Error("No se pudo extraer el ID (hash) del embed de UPNShare");
+        case 1:
+          origin = url.origin;
+          directUrl = `${origin}/api/v1/video?id=${encodeURIComponent(hash)}&w=1920&h=1080&r=`;
+          console.log(`[UPNShare] URL construida: ${directUrl}`);
+          return _context9.a(2, {
+            url: directUrl,
+            headers: {
+              Referer: `${origin}/`,
+              "User-Agent": UA
+            }
+          });
+      }
+    }, _callee9);
+  }));
+  return _extractUPNShare.apply(this, arguments);
+}
 Object.assign(SOURCE_EXTRACTORS, {
   MP4Upload: {
     label: "MP4Upload",
     extract: extractMP4Upload
+  },
+  UPNShare: {
+    label: "UPNShare",
+    extract: extractUPNShare
   }
-  // UPNShare: { label: "UPNShare", extract: extractUPNShare }, // pendiente: confirmar nombre exacto y patrón de embed
 });
 var getLangLabel = function getLangLabel(dub) {
   return dub ? "\u{1F1F2}\u{1F1FD} LATINO" : "\u{1F1EF}\u{1F1F5} JAPON\xC9S \xB7 \u{1F1F2}\u{1F1FD} Sub";
@@ -14969,7 +15004,7 @@ ${getLangLabel(server.dub)}`,
                 }
               }, _callee, null, [[1, 3]]);
             }));
-            return function (_x11) {
+            return function (_x12) {
               return _ref2.apply(this, arguments);
             };
           }()));
@@ -14986,7 +15021,7 @@ ${getLangLabel(server.dub)}`,
       }
     }, _callee2, null, [[2, 11]]);
   }));
-  return function (_x9, _x0, _x1, _x10) {
+  return function (_x0, _x1, _x10, _x11) {
     return _ref.apply(this, arguments);
   };
 }();
