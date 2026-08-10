@@ -39,6 +39,50 @@ async function getTMDBInfo(tmdbId, type) {
   return { title, year }
 }
 
+/**
+ * Año de emisión de una temporada específica, vía TMDB /tv/{id}/season/{n}.
+ * Es la pieza clave para distinguir temporadas: AnimeAV1 no organiza por
+ * temporada dentro de un slug, así que buscamos por año + título para
+ * encontrar la entrada correcta del catálogo (cada temporada suele ser una
+ * entrada de catálogo separada).
+ */
+async function getSeasonYear(tmdbId, seasonNum) {
+  try {
+    const url = `https://api.themoviedb.org/3/tv/${tmdbId}/season/${seasonNum}?api_key=${TMDB_API_KEY}&language=en-US`
+    const data = await fetch(url, { headers: { "User-Agent": UA } }).then((r) => {
+      if (!r.ok) throw Error(`HTTP error! Status: ${r.status}`)
+      return r.json()
+    })
+    const airDate = data?.air_date
+    const year = airDate ? new Date(airDate).getFullYear() : undefined
+    console.log(`[TMDB] Temporada ${seasonNum}: air_date="${airDate}" -> year=${year}`)
+    return year
+  } catch (e) {
+    console.warn(`[TMDB] getSeasonYear falló (temporada ${seasonNum}): ${e.message}`)
+    return undefined
+  }
+}
+
+/**
+ * Fallback de año vía Jikan (MyAnimeList), usado cuando TMDB no tiene el año
+ * de la temporada (común en animes con temporadas "artificiales" en TMDB).
+ */
+async function getJikanYear(title, seasonNum) {
+  try {
+    const query = seasonNum > 1 ? `${title} ${seasonNum}` : title
+    const url = `https://api.jikan.moe/v4/anime?q=${encodeURIComponent(query)}&limit=1`
+    const data = await fetch(url).then((r) => r.json())
+    const entry = data?.data?.[0]
+    if (!entry) { console.warn(`[Jikan] Sin resultados para "${query}"`); return undefined }
+    const year = entry.year ?? entry.aired?.prop?.from?.year ?? undefined
+    console.log(`[Jikan] "${entry.title}" year=${year}`)
+    return year
+  } catch (e) {
+    console.warn(`[Jikan] Error: ${e.message}`)
+    return undefined
+  }
+}
+
 // ─────────────────────────────────────────────
 // Búsqueda en AnimeAV1 (con fallbacks, igual que el addon original)
 // ─────────────────────────────────────────────
@@ -130,18 +174,38 @@ async function searchAnimeAV1(query, year) {
   throw Error("No search results!")
 }
 
+// Patrones que indican temporada 2+ en el título del catálogo — se usan para
+// descartar candidatos de temporadas superiores cuando buscamos la T1.
+const HIGHER_SEASON_PATTERNS = [
+  /\b2nd\s+season\b/i, /\b3rd\s+season\b/i, /\b4th\s+season\b/i,
+  /\bseason\s+[2-9]\b/i, /\bpart\s+[2-9]\b/i,
+  /\b2\w*\s+temporada\b/i,
+  /\s+[2-9]$/,
+]
+
 /**
- * Elige el mejor candidato de una lista de resultados de búsqueda, comparando
- * similitud simple de título (substring / igualdad normalizada).
+ * Elige el mejor candidato de una lista de resultados de búsqueda.
+ * @param {Array} candidates
+ * @param {string} searchTerm - término de búsqueda ya con temporada incluida si aplica (ej: "Frieren 3")
+ * @param {number} seasonNum
  */
-function pickBestMatch(candidates, title) {
+function pickBestMatch(candidates, searchTerm, seasonNum) {
   const norm = (s) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
-  const target = norm(title)
-  let best = candidates.find(c => norm(c.title) === target)
+
+  let pool = candidates
+  if (seasonNum === 1) {
+    // Para temporada 1, evitamos que un resultado de T2/T3 gane el match
+    // (por ejemplo si el catálogo no tiene la T1 pero sí la T2 con título similar).
+    const filtered = candidates.filter((c) => !HIGHER_SEASON_PATTERNS.some((p) => p.test(c.title)))
+    if (filtered.length > 0) pool = filtered
+  }
+
+  const target = norm(searchTerm)
+  let best = pool.find((c) => norm(c.title) === target)
   if (best) return best
-  best = candidates.find(c => norm(c.title).includes(target) || target.includes(norm(c.title)))
+  best = pool.find((c) => norm(c.title).includes(target) || target.includes(norm(c.title)))
   if (best) return best
-  return candidates[0]
+  return pool[0]
 }
 
 // ─────────────────────────────────────────────
@@ -350,8 +414,29 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
     const info = await getTMDBInfo(tmdbId, type)
     if (!info) return []
 
-    const candidates = await searchAnimeAV1(info.title, info.year)
-    const match = pickBestMatch(candidates, info.title)
+    const seasonNum = type === "movie" ? 1 : (season ? Number(season) : 1)
+    // Clave del fix: para temporadas 2+, el término de búsqueda incluye el
+    // número de temporada (ej: "Frieren 3"), ya que en AnimeAV1 cada
+    // temporada es una entrada de catálogo distinta, no un sub-item del slug base.
+    const searchTerm = seasonNum !== 1 ? `${info.title} ${seasonNum}` : info.title
+
+    // Año de la temporada específica: TMDB primero, Jikan como respaldo.
+    // Es lo que nos permite distinguir "Frieren T1 (2023)" de "Frieren T3 (2026)"
+    // cuando ambas entradas del catálogo tienen títulos casi idénticos.
+    let seasonYear
+    if (type === "movie") {
+      seasonYear = info.year
+    } else {
+      seasonYear = await getSeasonYear(tmdbId, seasonNum)
+      if (seasonYear === undefined) {
+        console.warn(`[AnimeAV1] TMDB sin año para temporada ${seasonNum}, probando Jikan`)
+        seasonYear = await getJikanYear(info.title, seasonNum)
+      }
+    }
+
+    console.log(`[AnimeAV1] searchTerm="${searchTerm}" year=${seasonYear ?? 'ninguno'}`)
+    const candidates = await searchAnimeAV1(searchTerm, seasonYear)
+    const match = pickBestMatch(candidates, searchTerm, seasonNum)
     console.log(`[AnimeAV1] Match elegido: "${match.title}" (${match.slug})`)
 
     const epNumber = type === "movie" ? 1 : (episode !== undefined ? Number(episode) : 1)
