@@ -6,50 +6,10 @@
 // Stream: { name, title, url, quality, headers? }
 
 const cheerio = require("cheerio-without-node-native")
-const CryptoJS = require("crypto-js")
 
 const ANIMEAV1_BASE = "https://animeav1.com"
 const TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c" // misma key pública usada en PeliSeriesHoy
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-
-// Cuánto esperar antes de abandonar un fetch. mp4upload responde en bien
-// menos de un segundo o no responde — este valor está muy por encima de una
-// respuesta normal y muy por debajo de una conexión colgada indefinidamente.
-const FETCH_TIMEOUT_MS = 8000
-
-// Circuit breaker en memoria: si un source falla, se recuerda por un rato para
-// no pagar el timeout completo de nuevo en el siguiente episodio de la misma
-// sesión. NOTA: esto vive solo en memoria del proceso JS — se resetea si la
-// app de Nuvio se recarga o cierra (no hay AsyncStorage/persistencia
-// documentada y soportada para providers, a diferencia del proyecto de
-// referencia en Kotlin/Seanime del que se portó esta idea).
-const DOWN_TTL_MS = 5 * 60 * 1000
-const sourceDownUntil = {} // { [sourceKey]: timestampMs }
-
-function isSourceDown(sourceKey) {
-  const until = sourceDownUntil[sourceKey]
-  return typeof until === 'number' && Date.now() < until
-}
-
-function markSourceDown(sourceKey) {
-  sourceDownUntil[sourceKey] = Date.now() + DOWN_TTL_MS
-  console.warn(`[AnimeAV1] ${sourceKey} marcado como caído por ${DOWN_TTL_MS / 1000}s`)
-}
-
-/**
- * fetch con timeout real vía Promise.race. Se evita `AbortController`
- * deliberadamente: en React Native tiene soporte inconsistente (ver
- * facebook/react-native#50015 — DOMException no existe como tipo, abort()
- * puede no tener efecto real), y usarlo rompió el plugin por completo en
- * producción. Promise.race no depende de ninguna Web API adicional: el
- * fetch real puede seguir en curso de fondo, pero dejamos de esperarlo.
- */
-function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
-  const timeout = new Promise((_, reject) => {
-    setTimeout(() => reject(new Error(`Timeout tras ${timeoutMs}ms: ${url}`)), timeoutMs)
-  })
-  return Promise.race([fetch(url, options), timeout])
-}
 
 // Servidores soportados: nombre tal como aparece en el HTML/__data.json de
 // AnimeAV1 -> función extractora que resuelve el link directo reproducible.
@@ -395,36 +355,6 @@ async function getEpisodeServers(slug, epNumber) {
   }
 }
 
-/**
- * HLS/zilla-networks — DIAGNÓSTICO, con headers Sec-Fetch-* añadidos.
- *
- * Intento previo (solo Referer + User-Agent) confirmó 403 en los segmentos
- * (/segs/), aunque el manifest .m3u8 sí respondía 200. Un proyecto de
- * referencia documentó que Cloudflare rechaza segmentos que "no parecen"
- * venir del propio reproductor, específicamente por falta de headers
- * Sec-Fetch-*, y que esos headers deben repetirse en CADA segmento, no solo
- * en el manifest inicial. Como el plugin solo entrega una URL + headers fijos
- * a Nuvio (no controla cómo el player pide luego cada segmento del m3u8),
- * esto solo puede ayudar si el player de Nuvio reenvía los headers del
- * stream original a los sub-requests de los segmentos — no confirmado.
- * Se deja como intento adicional, pero con expectativa baja de que funcione.
- */
-async function extractZillaHLS(playUrl) {
-  const directUrl = playUrl.replace('/play/', '/m3u8/')
-  console.log(`[HLS-zilla][DIAGNÓSTICO] URL construida: ${directUrl}`)
-  return {
-    url: directUrl,
-    headers: {
-      "Referer": "https://player.zilla-networks.com/",
-      "Sec-Fetch-Site": "same-origin",
-      "Sec-Fetch-Mode": "cors",
-      "Sec-Fetch-Dest": "empty",
-      "User-Agent": UA
-    },
-    type: "hls"
-  }
-}
-
 // ─────────────────────────────────────────────
 // Extractores por source: cada uno recibe la URL de embed/download que
 // devolvió AnimeAV1 y resuelve el link directo reproducible + sus headers.
@@ -437,7 +367,7 @@ async function extractZillaHLS(playUrl) {
  */
 async function extractMP4Upload(embedUrl) {
   const origin = (() => { try { return new URL(embedUrl).origin } catch (_) { return "https://www.mp4upload.com" } })()
-  const resp = await fetchWithTimeout(embedUrl, {
+  const resp = await fetch(embedUrl, {
     headers: {
       "Referer": origin,
       "Origin": origin,
@@ -455,109 +385,10 @@ async function extractMP4Upload(embedUrl) {
   }
 }
 
-/**
- * UPNShare (https://animeav1.uns.bio/#<hash>)
- *
- * Portado de RpmvidExtractor.kt (proyecto Streamflix). El endpoint
- * /api/v1/video no devuelve el video ni un manifest en claro: devuelve un
- * payload hexadecimal que es JSON cifrado con AES-128/CBC/PKCS7 (clave e IV
- * fijos, hardcodeados por el propio sitio — no son secretos nuestros).
- * Una vez descifrado, el JSON trae una de varias rutas posibles:
- *   - hls / hlsVideoTiktok -> manifest HLS relativo al dominio de uns.bio
- *   - cf                   -> link "cf" (con posible firma k/kx o cfExpire)
- *   - source                -> link directo
- *
- * IMPORTANTE: en la mayoría de los casos observados, la ruta resuelta es HLS.
- * Eso significa que hereda el mismo riesgo que zilla-networks: si Cloudflare
- * aplica una regla WAF agresiva a los segmentos de uns.bio, esto podría
- * fallar en producción igual que zilla, incluso si el manifest se resuelve bien.
- * No confirmado aún — a validar con pruebas reales.
- */
-const UPN_AES_KEY = "kiemtienmua911ca" // 16 bytes -> AES-128
-const UPN_AES_IV = "1234567890oiuytr"  // 16 bytes
-
-function decryptUPNSharePayload(hexPayload) {
-  const key = CryptoJS.enc.Utf8.parse(UPN_AES_KEY)
-  const iv = CryptoJS.enc.Utf8.parse(UPN_AES_IV)
-  const cipherParams = CryptoJS.lib.CipherParams.create({ ciphertext: CryptoJS.enc.Hex.parse(hexPayload) })
-  const decrypted = CryptoJS.AES.decrypt(cipherParams, key, { iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 })
-  return decrypted.toString(CryptoJS.enc.Utf8)
-}
-
-async function extractUPNShare(embedUrl) {
-  const hashMatch = embedUrl.match(/#([^/?#]+)/)
-  const hash = hashMatch?.[1]
-  if (!hash) throw Error("No se pudo extraer el ID (hash) del embed de UPNShare")
-
-  const originMatch = embedUrl.match(/^(https?:\/\/[^/#?]+)/)
-  const origin = originMatch?.[1]
-  if (!origin) throw Error("No se pudo extraer el origin del embed de UPNShare")
-
-  const apiUrl = `${origin}/api/v1/video?id=${encodeURIComponent(hash)}&w=1920&h=1080&r=`
-  const resp = await fetchWithTimeout(apiUrl, { headers: { Referer: `${origin}/`, "User-Agent": UA } })
-  if (!resp.ok) throw Error(`HTTP error! Status: ${resp.status}`)
-  const hexPayload = await resp.text()
-
-  let json
-  try {
-    json = JSON.parse(decryptUPNSharePayload(hexPayload))
-  } catch (e) {
-    throw Error(`No se pudo descifrar/parsear el payload de UPNShare: ${e.message}`)
-  }
-
-  const hlsPath = json.hls || undefined
-  const hlsTiktok = json.hlsVideoTiktok || undefined
-  const sourcePath = json.source || undefined
-  let cfPath = json.cf || undefined
-  const cfExpire = json.cfExpire || undefined
-
-  let finalUrl, isHLS = false
-
-  if (hlsPath) {
-    finalUrl = `${origin}${hlsPath}`
-    isHLS = true
-  } else if (hlsTiktok) {
-    let v = "", domain = ""
-    try {
-      const config = JSON.parse(json.streamingConfig || "{}")
-      const tiktok = config?.adjust?.Tiktok
-      v = tiktok?.params?.v || ""
-      domain = tiktok?.domain || ""
-    } catch (_) { /* no-op */ }
-    const tiktokPath = (domain && hlsTiktok.startsWith('/hls/'))
-      ? hlsTiktok.replace('/hls/', `/hlsmod/${domain}/`)
-      : hlsTiktok
-    finalUrl = `${origin}${tiktokPath}${v ? `?v=${v}` : ''}`
-    isHLS = true
-  } else if (cfPath && !cfPath.includes('skyforgeconcepts.shop')) {
-    const pk = json.pk
-    if (pk?.k && pk?.kx) {
-      cfPath = `${cfPath}?k=${pk.k}&kx=${pk.kx}`
-    } else if (cfExpire) {
-      const [t, e] = String(cfExpire).split('::')
-      if (t && e) cfPath = `${cfPath}?t=${t}&e=${e}`
-    }
-    finalUrl = cfPath
-  } else if (sourcePath) {
-    finalUrl = sourcePath
-  } else {
-    throw Error("Payload de UPNShare sin hls, hlsVideoTiktok, cf ni source")
-  }
-
-  console.log(`[UPNShare] Resuelto (${isHLS ? 'HLS' : 'directo'}): ${finalUrl}`)
-  return {
-    url: finalUrl,
-    headers: { Referer: `${origin}/`, ...(isHLS ? {} : { Origin: origin }) },
-    type: isHLS ? "hls" : "mp4"
-  }
-}
-
 // Registro de sources soportados: nombre (tal como aparece en AnimeAV1) -> { label, extract }
 // Para sumar un nuevo source: escribir su función extract(url) -> {url, headers}, y agregarlo aquí.
 Object.assign(SOURCE_EXTRACTORS, {
-  MP4Upload: { label: "MP4Upload", extract: extractMP4Upload },
-  UPNShare: { label: "UPNShare", extract: extractUPNShare },
-  HLS: { label: "HLS (diagnóstico)", extract: extractZillaHLS }
+  MP4Upload: { label: "MP4Upload", extract: extractMP4Upload }
 })
 
 // ─────────────────────────────────────────────
@@ -625,11 +456,6 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
       const source = sourceKey ? SOURCE_EXTRACTORS[sourceKey] : null
       if (!source) return null
 
-      if (isSourceDown(sourceKey)) {
-        console.log(`[${source.label}] Saltado: marcado como caído recientemente`)
-        return null
-      }
-
       try {
         const resolved = await source.extract(server.url)
         return {
@@ -642,12 +468,6 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
         }
       } catch (e) {
         console.warn(`[${source.label}] Falló resolviendo un servidor: ${e.message}`)
-        // Solo activamos el circuit breaker ante señales de host caído/lento
-        // (timeout o error de red), no ante errores de contenido puntuales
-        // (ej. un episodio sin ese source), que no dicen nada sobre el host.
-        if (/^Timeout tras|network|fetch failed|ECONNREFUSED|ETIMEDOUT/i.test(e.message)) {
-          markSourceDown(sourceKey)
-        }
         return null
       }
     }))
