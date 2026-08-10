@@ -1,12 +1,12 @@
 {
   "name": "AnimeAV1",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "scrapers": [
     {
       "id": "AnimeAV1",
       "name": "AnimeAV1",
-      "description": "Streams de anime (SUB/DUB) desde AnimeAV1, vía MP4Upload.",
-      "version": "1.0.0",
+      "description": "Streams de anime (SUB/DUB) desde AnimeAV1, vía MP4Upload, HLS.",
+      "version": "1.0.1",
       "author": "-",
       "supportedTypes": ["movie", "tv"],
       "filename": "providers/animeav1.js",

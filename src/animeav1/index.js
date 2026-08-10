@@ -8,7 +8,7 @@
 const cheerio = require("cheerio-without-node-native")
 
 const ANIMEAV1_BASE = "https://animeav1.com"
-const TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c" // misma key pública usada en PeliSeriesHoy
+const TMDB_API_KEY = "56db0ec297530920213e1503706b81ff" // Api TMDB
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 // Servidores soportados: nombre tal como aparece en el HTML/__data.json de
@@ -411,7 +411,7 @@ async function extractZillaHLS(playUrl) {
 // Para sumar un nuevo source: escribir su función extract(url) -> {url, headers}, y agregarlo aquí.
 Object.assign(SOURCE_EXTRACTORS, {
   MP4Upload: { label: "MP4Upload", extract: extractMP4Upload },
-  HLS: { label: "HLS (diagnóstico)", extract: extractZillaHLS }
+  HLS: { label: "HLS", extract: extractZillaHLS }
 })
 
 // ─────────────────────────────────────────────
