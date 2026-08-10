@@ -14557,7 +14557,7 @@ function _searchAnimeAV() {
                 }
               }, _callee7);
             }));
-            return function runSearch(_x17) {
+            return function runSearch(_x18) {
               return _ref3.apply(this, arguments);
             };
           }();
@@ -14652,7 +14652,7 @@ function getEpisodeServers(_x0, _x1) {
 }
 function _getEpisodeServers() {
   _getEpisodeServers = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee9(slug, epNumber) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, ep, pageUrl, resolveServer2, matchesSupportedSource2, extractServers2, resolveServer, matchesSupportedSource, extractServers, jsonUrl, resp, root, nodes, dataArray, _iterator2, _step2, node, hasEmbeds, episodeObj, embedsIndex, embeds, servers, subIndex, dubIndex, downloadsIndex, downloads, dlSubIndex, dlDubIndex, html, $, scripts, metadataJSON, serversObj, serversObjDUB, downloadObj, downloadObjDUB, raw, _servers, _t8, _t9, _t0;
+    var _a, _b, _c, _d, _e, _f, _g, _h, ep, pageUrl, matchesSupportedSource2, resolveField2, resolveServer2, extractServers2, matchesSupportedSource, resolveField, resolveServer, extractServers, jsonUrl, resp, root, nodes, dataArray, _iterator2, _step2, node, hasEmbeds, episodeObj, embedsIndex, embeds, servers, subIndex, dubIndex, downloadsIndex, downloads, dlSubIndex, dlDubIndex, html, $, scripts, metadataJSON, serversObj, serversObjDUB, downloadObj, downloadObjDUB, raw, _servers, _t8, _t9, _t0;
     return _regenerator().w(function (_context9) {
       while (1) switch (_context9.p = _context9.n) {
         case 0:
@@ -14660,12 +14660,23 @@ function _getEpisodeServers() {
           pageUrl = `${ANIMEAV1_BASE}/media/${slug}/${ep}`;
           console.log(`[AnimeAV1] GetEpisodeServers: ${pageUrl}`);
           _context9.p = 1;
-          resolveServer2 = function resolveServer2(objIndex) {
+          matchesSupportedSource2 = function matchesSupportedSource2(name) {
+            return Object.keys(SOURCE_EXTRACTORS).some(function (key) {
+              return name.includes(key);
+            });
+          }, resolveField2 = function resolveField2(value) {
+            if (typeof value === "number" && dataArray[value] !== void 0) {
+              var resolved = dataArray[value];
+              if (typeof resolved === "string") return resolved;
+            }
+            if (typeof value === "string") return value;
+            return null;
+          }, resolveServer2 = function resolveServer2(entry) {
             try {
-              var obj = dataArray[objIndex];
+              var obj = typeof entry === "number" ? dataArray[entry] : entry;
               if (!obj || typeof obj !== "object") return null;
-              var serverName = dataArray[obj.server];
-              var url = dataArray[obj.url];
+              var serverName = resolveField2(obj.server);
+              var url = resolveField2(obj.url);
               if (typeof serverName !== "string" || typeof url !== "string") return null;
               return {
                 name: serverName,
@@ -14674,19 +14685,15 @@ function _getEpisodeServers() {
             } catch (_) {
               return null;
             }
-          }, matchesSupportedSource2 = function matchesSupportedSource2(name) {
-            return Object.keys(SOURCE_EXTRACTORS).some(function (key) {
-              return name.includes(key);
-            });
-          }, extractServers2 = function extractServers2(listIndex, dub) {
-            var list = dataArray[listIndex];
+          }, extractServers2 = function extractServers2(listOrIndex, dub) {
+            var list = typeof listOrIndex === "number" ? dataArray[listOrIndex] : listOrIndex;
             if (!Array.isArray(list)) return;
             var _iterator = _createForOfIteratorHelper(list),
               _step;
             try {
               for (_iterator.s(); !(_step = _iterator.n()).done;) {
-                var objIndex = _step.value;
-                var server = resolveServer2(objIndex);
+                var entry = _step.value;
+                var server = resolveServer2(entry);
                 if (!server || !server.url.startsWith("http")) continue;
                 if (!matchesSupportedSource2(server.name)) continue;
                 servers.push({
@@ -14694,6 +14701,7 @@ function _getEpisodeServers() {
                   url: server.url,
                   dub
                 });
+                console.log(`[AnimeAV1] Servidor detectado: ${server.name} (${dub ? "DUB" : "SUB"})`);
               }
             } catch (err) {
               _iterator.e(err);
@@ -14701,7 +14709,7 @@ function _getEpisodeServers() {
               _iterator.f();
             }
           };
-          resolveServer = resolveServer2, matchesSupportedSource = matchesSupportedSource2, extractServers = extractServers2;
+          matchesSupportedSource = matchesSupportedSource2, resolveField = resolveField2, resolveServer = resolveServer2, extractServers = extractServers2;
           jsonUrl = `${pageUrl}/__data.json`;
           _context9.n = 2;
           return fetch(jsonUrl, {
@@ -14791,18 +14799,18 @@ function _getEpisodeServers() {
           throw Error("No embeds object");
         case 15:
           servers = [];
-          subIndex = (_b = (_a = embeds.SUB) != null ? _a : embeds.sub) != null ? _b : -1;
-          dubIndex = (_d = (_c = embeds.DUB) != null ? _c : embeds.dub) != null ? _d : -1;
-          if (subIndex >= 0) extractServers2(subIndex, false);
-          if (dubIndex >= 0) extractServers2(dubIndex, true);
+          subIndex = (_a = embeds.SUB) != null ? _a : embeds.sub;
+          dubIndex = (_b = embeds.DUB) != null ? _b : embeds.dub;
+          if (subIndex !== void 0) extractServers2(subIndex, false);
+          if (dubIndex !== void 0) extractServers2(dubIndex, true);
           downloadsIndex = episodeObj.downloads;
           if (downloadsIndex !== void 0) {
             downloads = dataArray[downloadsIndex];
             if (downloads && typeof downloads === "object") {
-              dlSubIndex = (_f = (_e = downloads.SUB) != null ? _e : downloads.sub) != null ? _f : -1;
-              dlDubIndex = (_h = (_g = downloads.DUB) != null ? _g : downloads.dub) != null ? _h : -1;
-              if (dlSubIndex >= 0) extractServers2(dlSubIndex, false);
-              if (dlDubIndex >= 0) extractServers2(dlDubIndex, true);
+              dlSubIndex = (_c = downloads.SUB) != null ? _c : downloads.sub;
+              dlDubIndex = (_d = downloads.DUB) != null ? _d : downloads.dub;
+              if (dlSubIndex !== void 0) extractServers2(dlSubIndex, false);
+              if (dlDubIndex !== void 0) extractServers2(dlDubIndex, true);
             }
           }
           if (!(servers.length > 0)) {
@@ -14837,10 +14845,10 @@ function _getEpisodeServers() {
           }).get().find(function (s) {
             return s == null ? void 0 : s.includes("kit.start(app, element, {");
           });
-          serversObj = (_i = metadataJSON == null ? void 0 : metadataJSON.match(/embeds:\s?.*?SUB:\s?(\[.*?\])/)) == null ? void 0 : _i[1];
-          serversObjDUB = (_j = metadataJSON == null ? void 0 : metadataJSON.match(/embeds:\s?.*?DUB:\s?(\[.*?\])/)) == null ? void 0 : _j[1];
-          downloadObj = (_k = metadataJSON == null ? void 0 : metadataJSON.match(/downloads:\s?.*?SUB:\s?(\[.*?\])/)) == null ? void 0 : _k[1];
-          downloadObjDUB = (_l = metadataJSON == null ? void 0 : metadataJSON.match(/downloads:\s?.*?DUB:\s?(\[.*?\])/)) == null ? void 0 : _l[1];
+          serversObj = (_e = metadataJSON == null ? void 0 : metadataJSON.match(/embeds:\s?.*?SUB:\s?(\[.*?\])/)) == null ? void 0 : _e[1];
+          serversObjDUB = (_f = metadataJSON == null ? void 0 : metadataJSON.match(/embeds:\s?.*?DUB:\s?(\[.*?\])/)) == null ? void 0 : _f[1];
+          downloadObj = (_g = metadataJSON == null ? void 0 : metadataJSON.match(/downloads:\s?.*?SUB:\s?(\[.*?\])/)) == null ? void 0 : _g[1];
+          downloadObjDUB = (_h = metadataJSON == null ? void 0 : metadataJSON.match(/downloads:\s?.*?DUB:\s?(\[.*?\])/)) == null ? void 0 : _h[1];
           raw = [];
           if (serversObj) raw = raw.concat(serversObj.split("},").map(function (s) {
             var _a2, _b2;
@@ -14986,6 +14994,29 @@ function _extractUPNShare() {
   }));
   return _extractUPNShare.apply(this, arguments);
 }
+function extractZillaHLS(_x12) {
+  return _extractZillaHLS.apply(this, arguments);
+}
+function _extractZillaHLS() {
+  _extractZillaHLS = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee10(playUrl) {
+    var directUrl;
+    return _regenerator().w(function (_context10) {
+      while (1) switch (_context10.n) {
+        case 0:
+          directUrl = playUrl.replace("/play/", "/m3u8/");
+          console.log(`[HLS-zilla][DIAGN\xD3STICO] URL construida: ${directUrl}`);
+          return _context10.a(2, {
+            url: directUrl,
+            headers: {
+              Referer: ANIMEAV1_BASE + "/",
+              "User-Agent": UA
+            }
+          });
+      }
+    }, _callee10);
+  }));
+  return _extractZillaHLS.apply(this, arguments);
+}
 Object.assign(SOURCE_EXTRACTORS, {
   MP4Upload: {
     label: "MP4Upload",
@@ -14994,6 +15025,10 @@ Object.assign(SOURCE_EXTRACTORS, {
   UPNShare: {
     label: "UPNShare",
     extract: extractUPNShare
+  },
+  HLS: {
+    label: "HLS (diagn\xF3stico)",
+    extract: extractZillaHLS
   }
 });
 var getLangLabel = function getLangLabel(dub) {
@@ -15114,7 +15149,7 @@ ${getLangLabel(server.dub)}`,
                 }
               }, _callee, null, [[1, 3]]);
             }));
-            return function (_x16) {
+            return function (_x17) {
               return _ref2.apply(this, arguments);
             };
           }()));
@@ -15131,7 +15166,7 @@ ${getLangLabel(server.dub)}`,
       }
     }, _callee2, null, [[2, 15]]);
   }));
-  return function (_x12, _x13, _x14, _x15) {
+  return function (_x13, _x14, _x15, _x16) {
     return _ref.apply(this, arguments);
   };
 }();

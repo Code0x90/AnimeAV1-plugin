@@ -249,46 +249,66 @@ async function getEpisodeServers(slug, epNumber) {
 
     const servers = []
 
-    function resolveServer(objIndex) {
+    function matchesSupportedSource(name) {
+      return Object.keys(SOURCE_EXTRACTORS).some((key) => name.includes(key))
+    }
+
+    // El __data.json de SvelteKit serializa arrays anidados como índices hacia
+    // dataArray (formato "devalue"), así que embeds.SUB es un índice, no el
+    // array en sí. Pero los OBJETOS dentro de ese array pueden venir de dos formas:
+    //   a) también indexados: {server: <idx>, url: <idx>} -> hay que resolver cada campo
+    //   b) ya como valores literales: {server: "MP4Upload", url: "https://..."}
+    // Soportamos ambos casos sin asumir cuál aplica.
+    function resolveField(value) {
+      // Si es un índice numérico válido dentro de dataArray, lo resolvemos;
+      // si ya es un string usable (empieza con http o es un nombre de server
+      // corto), lo devolvemos tal cual.
+      if (typeof value === 'number' && dataArray[value] !== undefined) {
+        const resolved = dataArray[value]
+        if (typeof resolved === 'string') return resolved
+      }
+      if (typeof value === 'string') return value
+      return null
+    }
+
+    function resolveServer(entry) {
       try {
-        const obj = dataArray[objIndex]
+        // `entry` puede ser un índice hacia un objeto {server, url}, o el objeto ya resuelto.
+        const obj = typeof entry === 'number' ? dataArray[entry] : entry
         if (!obj || typeof obj !== 'object') return null
-        const serverName = dataArray[obj.server]
-        const url = dataArray[obj.url]
+        const serverName = resolveField(obj.server)
+        const url = resolveField(obj.url)
         if (typeof serverName !== 'string' || typeof url !== 'string') return null
         return { name: serverName, url }
       } catch (_) { return null }
     }
 
-    function matchesSupportedSource(name) {
-      return Object.keys(SOURCE_EXTRACTORS).some((key) => name.includes(key))
-    }
-
-    function extractServers(listIndex, dub) {
-      const list = dataArray[listIndex]
+    function extractServers(listOrIndex, dub) {
+      const list = typeof listOrIndex === 'number' ? dataArray[listOrIndex] : listOrIndex
       if (!Array.isArray(list)) return
-      for (const objIndex of list) {
-        const server = resolveServer(objIndex)
+      for (const entry of list) {
+        const server = resolveServer(entry)
         if (!server || !server.url.startsWith('http')) continue
         if (!matchesSupportedSource(server.name)) continue // ── solo sources soportados ──
         servers.push({ name: server.name, url: server.url, dub })
+        console.log(`[AnimeAV1] Servidor detectado: ${server.name} (${dub ? 'DUB' : 'SUB'})`)
       }
     }
 
-    const subIndex = embeds.SUB ?? embeds.sub ?? -1
-    const dubIndex = embeds.DUB ?? embeds.dub ?? -1
-    if (subIndex >= 0) extractServers(subIndex, false)
-    if (dubIndex >= 0) extractServers(dubIndex, true)
+    const subIndex = embeds.SUB ?? embeds.sub
+    const dubIndex = embeds.DUB ?? embeds.dub
+    if (subIndex !== undefined) extractServers(subIndex, false)
+    if (dubIndex !== undefined) extractServers(dubIndex, true)
 
     // Algunos episodios exponen sources como "download" en vez de "embed"
     const downloadsIndex = episodeObj.downloads
     if (downloadsIndex !== undefined) {
       const downloads = dataArray[downloadsIndex]
       if (downloads && typeof downloads === 'object') {
-        const dlSubIndex = downloads.SUB ?? downloads.sub ?? -1
-        const dlDubIndex = downloads.DUB ?? downloads.dub ?? -1
-        if (dlSubIndex >= 0) extractServers(dlSubIndex, false)
-        if (dlDubIndex >= 0) extractServers(dlDubIndex, true)
+        const dlSubIndex = downloads.SUB ?? downloads.sub
+        const dlDubIndex = downloads.DUB ?? downloads.dub
+        if (dlSubIndex !== undefined) extractServers(dlSubIndex, false)
+        if (dlDubIndex !== undefined) extractServers(dlDubIndex, true)
       }
     }
 
@@ -386,11 +406,30 @@ async function extractUPNShare(embedUrl) {
   }
 }
 
+/**
+ * HLS/zilla-networks — SOLO DIAGNÓSTICO, no apto para producción.
+ * Confirmado en pruebas previas: el manifest .m3u8 responde 200, pero cada
+ * segmento individual (/segs/.../000.html) es bloqueado por una regla WAF
+ * de Cloudflare específica ("Attention Required"), incluso con impersonation
+ * TLS vía curl_cffi. Se deja aquí solo para inspeccionar en logs si el
+ * manifest se arma bien; el stream resultante probablemente no reproduzca.
+ */
+async function extractZillaHLS(playUrl) {
+  // El embed original usa /play/<id>; el manifest real vive en /m3u8/<id>
+  const directUrl = playUrl.replace('/play/', '/m3u8/')
+  console.log(`[HLS-zilla][DIAGNÓSTICO] URL construida: ${directUrl}`)
+  return {
+    url: directUrl,
+    headers: { Referer: ANIMEAV1_BASE + "/", "User-Agent": UA }
+  }
+}
+
 // Registro de sources soportados: nombre (tal como aparece en AnimeAV1) -> { label, extract }
 // Para sumar un nuevo source: escribir su función extract(url) -> {url, headers}, y agregarlo aquí.
 Object.assign(SOURCE_EXTRACTORS, {
   MP4Upload: { label: "MP4Upload", extract: extractMP4Upload },
-  UPNShare: { label: "UPNShare", extract: extractUPNShare }
+  UPNShare: { label: "UPNShare", extract: extractUPNShare },
+  HLS: { label: "HLS (diagnóstico)", extract: extractZillaHLS }
 })
 
 // ─────────────────────────────────────────────
