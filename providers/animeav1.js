@@ -14557,7 +14557,7 @@ function _searchAnimeAV() {
                 }
               }, _callee7);
             }));
-            return function runSearch(_x17) {
+            return function runSearch(_x16) {
               return _ref3.apply(this, arguments);
             };
           }();
@@ -14962,53 +14962,10 @@ function _extractMP4Upload() {
   }));
   return _extractMP4Upload.apply(this, arguments);
 }
-function extractUPNShare(_x11) {
-  return _extractUPNShare.apply(this, arguments);
-}
-function _extractUPNShare() {
-  _extractUPNShare = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee1(embedUrl) {
-    var hashMatch, hash, originMatch, origin, directUrl;
-    return _regenerator().w(function (_context1) {
-      while (1) switch (_context1.n) {
-        case 0:
-          hashMatch = embedUrl.match(/#([^/?#]+)/);
-          hash = hashMatch == null ? void 0 : hashMatch[1];
-          if (hash) {
-            _context1.n = 1;
-            break;
-          }
-          throw Error("No se pudo extraer el ID (hash) del embed de UPNShare");
-        case 1:
-          originMatch = embedUrl.match(/^(https?:\/\/[^/#?]+)/);
-          origin = originMatch == null ? void 0 : originMatch[1];
-          if (origin) {
-            _context1.n = 2;
-            break;
-          }
-          throw Error("No se pudo extraer el origin del embed de UPNShare");
-        case 2:
-          directUrl = `${origin}/api/v1/video.mp4?id=${encodeURIComponent(hash)}&w=1920&h=1080&r=`;
-          console.log(`[UPNShare] hash="${hash}" origin="${origin}" URL construida: ${directUrl}`);
-          return _context1.a(2, {
-            url: directUrl,
-            headers: {
-              Referer: `${origin}/`,
-              "User-Agent": UA
-            }
-          });
-      }
-    }, _callee1);
-  }));
-  return _extractUPNShare.apply(this, arguments);
-}
 Object.assign(SOURCE_EXTRACTORS, {
   MP4Upload: {
     label: "MP4Upload",
     extract: extractMP4Upload
-  },
-  UPNShare: {
-    label: "UPNShare",
-    extract: extractUPNShare
   }
 });
 var getLangLabel = function getLangLabel(dub) {
@@ -15129,7 +15086,7 @@ ${getLangLabel(server.dub)}`,
                 }
               }, _callee, null, [[1, 3]]);
             }));
-            return function (_x16) {
+            return function (_x15) {
               return _ref2.apply(this, arguments);
             };
           }()));
@@ -15146,7 +15103,7 @@ ${getLangLabel(server.dub)}`,
       }
     }, _callee2, null, [[2, 15]]);
   }));
-  return function (_x12, _x13, _x14, _x15) {
+  return function (_x11, _x12, _x13, _x14) {
     return _ref.apply(this, arguments);
   };
 }();

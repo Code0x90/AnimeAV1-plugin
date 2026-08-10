@@ -386,37 +386,19 @@ async function extractMP4Upload(embedUrl) {
 }
 
 /**
- * UPNShare (https://animeav1.uns.bio/#<hash>)
- * El hash tras el # es el `id` que la API de UPNShare usa para servir el
- * video directo en /api/v1/video. No requiere parsear HTML: solo hace falta
- * reescribir la URL y mandar el Referer correcto (dominio raíz de uns.bio).
+ * UPNShare — DESACTIVADO.
+ * El endpoint /api/v1/video de uns.bio requiere contexto de sesión del propio
+ * embed (no solo Referer) para servir el archivo real; sin él devuelve un
+ * .mp4 vacío. No vale la pena mantenerlo hasta encontrar cómo replicar esa
+ * sesión de forma confiable. Se deja el extractor comentado como referencia
+ * por si se retoma más adelante.
  */
-async function extractUPNShare(embedUrl) {
-  // Evitamos depender de la Web API `URL` (soporte incompleto en Hermes/React
-  // Native) y extraemos el hash y el origin con regex simple, más robusto
-  // para el runtime real de Nuvio.
-  const hashMatch = embedUrl.match(/#([^/?#]+)/)
-  const hash = hashMatch?.[1]
-  if (!hash) throw Error("No se pudo extraer el ID (hash) del embed de UPNShare")
-
-  const originMatch = embedUrl.match(/^(https?:\/\/[^/#?]+)/)
-  const origin = originMatch?.[1]
-  if (!origin) throw Error("No se pudo extraer el origin del embed de UPNShare")
-
-  const directUrl = `${origin}/api/v1/video.mp4?id=${encodeURIComponent(hash)}&w=1920&h=1080&r=`
-
-  console.log(`[UPNShare] hash="${hash}" origin="${origin}" URL construida: ${directUrl}`)
-  return {
-    url: directUrl,
-    headers: { Referer: `${origin}/`, "User-Agent": UA }
-  }
-}
+// async function extractUPNShare(embedUrl) { ... }
 
 // Registro de sources soportados: nombre (tal como aparece en AnimeAV1) -> { label, extract }
 // Para sumar un nuevo source: escribir su función extract(url) -> {url, headers}, y agregarlo aquí.
 Object.assign(SOURCE_EXTRACTORS, {
-  MP4Upload: { label: "MP4Upload", extract: extractMP4Upload },
-  UPNShare: { label: "UPNShare", extract: extractUPNShare }
+  MP4Upload: { label: "MP4Upload", extract: extractMP4Upload }
 })
 
 // ─────────────────────────────────────────────
