@@ -392,35 +392,23 @@ async function extractMP4Upload(embedUrl) {
  * reescribir la URL y mandar el Referer correcto (dominio raíz de uns.bio).
  */
 async function extractUPNShare(embedUrl) {
-  const url = new URL(embedUrl)
-  const hash = url.hash?.replace(/^#/, '')
+  // Evitamos depender de la Web API `URL` (soporte incompleto en Hermes/React
+  // Native) y extraemos el hash y el origin con regex simple, más robusto
+  // para el runtime real de Nuvio.
+  const hashMatch = embedUrl.match(/#([^/?#]+)/)
+  const hash = hashMatch?.[1]
   if (!hash) throw Error("No se pudo extraer el ID (hash) del embed de UPNShare")
 
-  const origin = url.origin // ej: https://animeav1.uns.bio
-  const directUrl = `${origin}/api/v1/video?id=${encodeURIComponent(hash)}&w=1920&h=1080&r=`
+  const originMatch = embedUrl.match(/^(https?:\/\/[^/#?]+)/)
+  const origin = originMatch?.[1]
+  if (!origin) throw Error("No se pudo extraer el origin del embed de UPNShare")
 
-  console.log(`[UPNShare] URL construida: ${directUrl}`)
+  const directUrl = `${origin}/api/v1/video.mp4?id=${encodeURIComponent(hash)}&w=1920&h=1080&r=`
+
+  console.log(`[UPNShare] hash="${hash}" origin="${origin}" URL construida: ${directUrl}`)
   return {
     url: directUrl,
     headers: { Referer: `${origin}/`, "User-Agent": UA }
-  }
-}
-
-/**
- * HLS/zilla-networks — SOLO DIAGNÓSTICO, no apto para producción.
- * Confirmado en pruebas previas: el manifest .m3u8 responde 200, pero cada
- * segmento individual (/segs/.../000.html) es bloqueado por una regla WAF
- * de Cloudflare específica ("Attention Required"), incluso con impersonation
- * TLS vía curl_cffi. Se deja aquí solo para inspeccionar en logs si el
- * manifest se arma bien; el stream resultante probablemente no reproduzca.
- */
-async function extractZillaHLS(playUrl) {
-  // El embed original usa /play/<id>; el manifest real vive en /m3u8/<id>
-  const directUrl = playUrl.replace('/play/', '/m3u8/')
-  console.log(`[HLS-zilla][DIAGNÓSTICO] URL construida: ${directUrl}`)
-  return {
-    url: directUrl,
-    headers: { Referer: ANIMEAV1_BASE + "/", "User-Agent": UA }
   }
 }
 
@@ -428,8 +416,7 @@ async function extractZillaHLS(playUrl) {
 // Para sumar un nuevo source: escribir su función extract(url) -> {url, headers}, y agregarlo aquí.
 Object.assign(SOURCE_EXTRACTORS, {
   MP4Upload: { label: "MP4Upload", extract: extractMP4Upload },
-  UPNShare: { label: "UPNShare", extract: extractUPNShare },
-  HLS: { label: "HLS (diagnóstico)", extract: extractZillaHLS }
+  UPNShare: { label: "UPNShare", extract: extractUPNShare }
 })
 
 // ─────────────────────────────────────────────

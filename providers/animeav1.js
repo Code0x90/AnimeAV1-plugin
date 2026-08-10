@@ -14557,7 +14557,7 @@ function _searchAnimeAV() {
                 }
               }, _callee7);
             }));
-            return function runSearch(_x18) {
+            return function runSearch(_x17) {
               return _ref3.apply(this, arguments);
             };
           }();
@@ -14967,21 +14967,28 @@ function extractUPNShare(_x11) {
 }
 function _extractUPNShare() {
   _extractUPNShare = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee1(embedUrl) {
-    var _a, url, hash, origin, directUrl;
+    var hashMatch, hash, originMatch, origin, directUrl;
     return _regenerator().w(function (_context1) {
       while (1) switch (_context1.n) {
         case 0:
-          url = new URL(embedUrl);
-          hash = (_a = url.hash) == null ? void 0 : _a.replace(/^#/, "");
+          hashMatch = embedUrl.match(/#([^/?#]+)/);
+          hash = hashMatch == null ? void 0 : hashMatch[1];
           if (hash) {
             _context1.n = 1;
             break;
           }
           throw Error("No se pudo extraer el ID (hash) del embed de UPNShare");
         case 1:
-          origin = url.origin;
-          directUrl = `${origin}/api/v1/video?id=${encodeURIComponent(hash)}&w=1920&h=1080&r=`;
-          console.log(`[UPNShare] URL construida: ${directUrl}`);
+          originMatch = embedUrl.match(/^(https?:\/\/[^/#?]+)/);
+          origin = originMatch == null ? void 0 : originMatch[1];
+          if (origin) {
+            _context1.n = 2;
+            break;
+          }
+          throw Error("No se pudo extraer el origin del embed de UPNShare");
+        case 2:
+          directUrl = `${origin}/api/v1/video.mp4?id=${encodeURIComponent(hash)}&w=1920&h=1080&r=`;
+          console.log(`[UPNShare] hash="${hash}" origin="${origin}" URL construida: ${directUrl}`);
           return _context1.a(2, {
             url: directUrl,
             headers: {
@@ -14994,29 +15001,6 @@ function _extractUPNShare() {
   }));
   return _extractUPNShare.apply(this, arguments);
 }
-function extractZillaHLS(_x12) {
-  return _extractZillaHLS.apply(this, arguments);
-}
-function _extractZillaHLS() {
-  _extractZillaHLS = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee10(playUrl) {
-    var directUrl;
-    return _regenerator().w(function (_context10) {
-      while (1) switch (_context10.n) {
-        case 0:
-          directUrl = playUrl.replace("/play/", "/m3u8/");
-          console.log(`[HLS-zilla][DIAGN\xD3STICO] URL construida: ${directUrl}`);
-          return _context10.a(2, {
-            url: directUrl,
-            headers: {
-              Referer: ANIMEAV1_BASE + "/",
-              "User-Agent": UA
-            }
-          });
-      }
-    }, _callee10);
-  }));
-  return _extractZillaHLS.apply(this, arguments);
-}
 Object.assign(SOURCE_EXTRACTORS, {
   MP4Upload: {
     label: "MP4Upload",
@@ -15025,10 +15009,6 @@ Object.assign(SOURCE_EXTRACTORS, {
   UPNShare: {
     label: "UPNShare",
     extract: extractUPNShare
-  },
-  HLS: {
-    label: "HLS (diagn\xF3stico)",
-    extract: extractZillaHLS
   }
 });
 var getLangLabel = function getLangLabel(dub) {
@@ -15149,7 +15129,7 @@ ${getLangLabel(server.dub)}`,
                 }
               }, _callee, null, [[1, 3]]);
             }));
-            return function (_x17) {
+            return function (_x16) {
               return _ref2.apply(this, arguments);
             };
           }()));
@@ -15166,7 +15146,7 @@ ${getLangLabel(server.dub)}`,
       }
     }, _callee2, null, [[2, 15]]);
   }));
-  return function (_x13, _x14, _x15, _x16) {
+  return function (_x12, _x13, _x14, _x15) {
     return _ref.apply(this, arguments);
   };
 }();
