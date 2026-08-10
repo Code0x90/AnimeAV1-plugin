@@ -14587,7 +14587,7 @@ function _searchAnimeAV() {
                 }
               }, _callee7);
             }));
-            return function runSearch(_x16) {
+            return function runSearch(_x17) {
               return _ref3.apply(this, arguments);
             };
           }();
@@ -14992,10 +14992,41 @@ function _extractMP4Upload() {
   }));
   return _extractMP4Upload.apply(this, arguments);
 }
+function extractZillaHLS(_x11) {
+  return _extractZillaHLS.apply(this, arguments);
+}
+function _extractZillaHLS() {
+  _extractZillaHLS = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee1(playUrl) {
+    var directUrl;
+    return _regenerator().w(function (_context1) {
+      while (1) switch (_context1.n) {
+        case 0:
+          directUrl = playUrl.replace("/play/", "/m3u8/");
+          console.log(`[HLS-zilla][DIAGN\xD3STICO] URL construida: ${directUrl}`);
+          return _context1.a(2, {
+            url: directUrl,
+            headers: {
+              "Referer": "https://player.zilla-networks.com/",
+              "Sec-Fetch-Site": "same-origin",
+              "Sec-Fetch-Mode": "cors",
+              "Sec-Fetch-Dest": "empty",
+              "User-Agent": UA
+            },
+            type: "hls"
+          });
+      }
+    }, _callee1);
+  }));
+  return _extractZillaHLS.apply(this, arguments);
+}
 Object.assign(SOURCE_EXTRACTORS, {
   MP4Upload: {
     label: "MP4Upload",
     extract: extractMP4Upload
+  },
+  HLS: {
+    label: "HLS (diagn\xF3stico)",
+    extract: extractZillaHLS
   }
 });
 var getLangLabel = function getLangLabel(dub) {
@@ -15118,7 +15149,7 @@ ${getLangLabel(server.dub)}`,
                 }
               }, _callee, null, [[1, 3]]);
             }));
-            return function (_x15) {
+            return function (_x16) {
               return _ref2.apply(this, arguments);
             };
           }()));
@@ -15135,7 +15166,7 @@ ${getLangLabel(server.dub)}`,
       }
     }, _callee2, null, [[2, 15]]);
   }));
-  return function (_x11, _x12, _x13, _x14) {
+  return function (_x12, _x13, _x14, _x15) {
     return _ref.apply(this, arguments);
   };
 }();

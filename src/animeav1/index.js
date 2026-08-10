@@ -385,10 +385,33 @@ async function extractMP4Upload(embedUrl) {
   }
 }
 
+/**
+ * HLS/zilla-networks — DIAGNÓSTICO, con headers Sec-Fetch-* añadidos.
+ * Confirmado: el manifest .m3u8 responde 200, pero los segmentos (/segs/)
+ * dieron 403 en una prueba anterior sin estos headers extra. Se prueba aquí
+ * si Sec-Fetch-Site/Mode/Dest cambian ese resultado.
+ */
+async function extractZillaHLS(playUrl) {
+  const directUrl = playUrl.replace('/play/', '/m3u8/')
+  console.log(`[HLS-zilla][DIAGNÓSTICO] URL construida: ${directUrl}`)
+  return {
+    url: directUrl,
+    headers: {
+      "Referer": "https://player.zilla-networks.com/",
+      "Sec-Fetch-Site": "same-origin",
+      "Sec-Fetch-Mode": "cors",
+      "Sec-Fetch-Dest": "empty",
+      "User-Agent": UA
+    },
+    type: "hls"
+  }
+}
+
 // Registro de sources soportados: nombre (tal como aparece en AnimeAV1) -> { label, extract }
 // Para sumar un nuevo source: escribir su función extract(url) -> {url, headers}, y agregarlo aquí.
 Object.assign(SOURCE_EXTRACTORS, {
-  MP4Upload: { label: "MP4Upload", extract: extractMP4Upload }
+  MP4Upload: { label: "MP4Upload", extract: extractMP4Upload },
+  HLS: { label: "HLS (diagnóstico)", extract: extractZillaHLS }
 })
 
 // ─────────────────────────────────────────────
