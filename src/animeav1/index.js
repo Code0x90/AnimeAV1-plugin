@@ -37,18 +37,18 @@ function markSourceDown(sourceKey) {
 }
 
 /**
- * fetch con timeout real vía AbortController. Sin esto, un host que no
- * responde puede colgar la resolución del stream indefinidamente (o hasta el
- * timeout genérico —y menos predecible— del cliente HTTP del propio Nuvio).
+ * fetch con timeout real vía Promise.race. Se evita `AbortController`
+ * deliberadamente: en React Native tiene soporte inconsistente (ver
+ * facebook/react-native#50015 — DOMException no existe como tipo, abort()
+ * puede no tener efecto real), y usarlo rompió el plugin por completo en
+ * producción. Promise.race no depende de ninguna Web API adicional: el
+ * fetch real puede seguir en curso de fondo, pero dejamos de esperarlo.
  */
-async function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-  try {
-    return await fetch(url, { ...options, signal: controller.signal })
-  } finally {
-    clearTimeout(timer)
-  }
+function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+  const timeout = new Promise((_, reject) => {
+    setTimeout(() => reject(new Error(`Timeout tras ${timeoutMs}ms: ${url}`)), timeoutMs)
+  })
+  return Promise.race([fetch(url, options), timeout])
 }
 
 // Servidores soportados: nombre tal como aparece en el HTML/__data.json de
@@ -395,6 +395,36 @@ async function getEpisodeServers(slug, epNumber) {
   }
 }
 
+/**
+ * HLS/zilla-networks — DIAGNÓSTICO, con headers Sec-Fetch-* añadidos.
+ *
+ * Intento previo (solo Referer + User-Agent) confirmó 403 en los segmentos
+ * (/segs/), aunque el manifest .m3u8 sí respondía 200. Un proyecto de
+ * referencia documentó que Cloudflare rechaza segmentos que "no parecen"
+ * venir del propio reproductor, específicamente por falta de headers
+ * Sec-Fetch-*, y que esos headers deben repetirse en CADA segmento, no solo
+ * en el manifest inicial. Como el plugin solo entrega una URL + headers fijos
+ * a Nuvio (no controla cómo el player pide luego cada segmento del m3u8),
+ * esto solo puede ayudar si el player de Nuvio reenvía los headers del
+ * stream original a los sub-requests de los segmentos — no confirmado.
+ * Se deja como intento adicional, pero con expectativa baja de que funcione.
+ */
+async function extractZillaHLS(playUrl) {
+  const directUrl = playUrl.replace('/play/', '/m3u8/')
+  console.log(`[HLS-zilla][DIAGNÓSTICO] URL construida: ${directUrl}`)
+  return {
+    url: directUrl,
+    headers: {
+      "Referer": "https://player.zilla-networks.com/",
+      "Sec-Fetch-Site": "same-origin",
+      "Sec-Fetch-Mode": "cors",
+      "Sec-Fetch-Dest": "empty",
+      "User-Agent": UA
+    },
+    type: "hls"
+  }
+}
+
 // ─────────────────────────────────────────────
 // Extractores por source: cada uno recibe la URL de embed/download que
 // devolvió AnimeAV1 y resuelve el link directo reproducible + sus headers.
@@ -526,7 +556,8 @@ async function extractUPNShare(embedUrl) {
 // Para sumar un nuevo source: escribir su función extract(url) -> {url, headers}, y agregarlo aquí.
 Object.assign(SOURCE_EXTRACTORS, {
   MP4Upload: { label: "MP4Upload", extract: extractMP4Upload },
-  UPNShare: { label: "UPNShare", extract: extractUPNShare }
+  UPNShare: { label: "UPNShare", extract: extractUPNShare },
+  HLS: { label: "HLS (diagnóstico)", extract: extractZillaHLS }
 })
 
 // ─────────────────────────────────────────────
@@ -614,7 +645,7 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
         // Solo activamos el circuit breaker ante señales de host caído/lento
         // (timeout o error de red), no ante errores de contenido puntuales
         // (ej. un episodio sin ese source), que no dicen nada sobre el host.
-        if (e.name === 'AbortError' || /network|fetch failed|ECONNREFUSED|ETIMEDOUT/i.test(e.message)) {
+        if (/^Timeout tras|network|fetch failed|ECONNREFUSED|ETIMEDOUT/i.test(e.message)) {
           markSourceDown(sourceKey)
         }
         return null
