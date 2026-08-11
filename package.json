@@ -1,6 +1,6 @@
 {
     "name": "nuvio-providers",
-    "version": "1.0.0",
+    "version": "1.0.2",
     "description": "Providers for Nuvio Streaming",
     "scripts": {
         "build": "node build.js",
@@ -11,11 +11,15 @@
         "@babel/core": "^7.24.0",
         "@babel/plugin-transform-async-to-generator": "^7.24.0",
         "@babel/preset-env": "^7.24.0",
-        "cheerio-without-node-native": "^0.20.2",
+        "crypto-js": "^4.2.0",
         "esbuild": "^0.20.0",
         "nodemon": "^3.0.0",
         "regenerator-runtime": "^0.14.1"
     },
-    "keywords": ["nuvio", "streaming", "providers"],
+    "keywords": [
+        "nuvio",
+        "streaming",
+        "providers"
+    ],
     "license": "GPL-3.0"
 }

@@ -5,10 +5,10 @@
 // Contrato Nuvio: exports.getStreams(tmdbId, type, season, episode) -> Promise<Array<Stream>>
 // Stream: { name, title, url, quality, headers? }
 
-const cheerio = require("cheerio-without-node-native")
+const CryptoJS = require("crypto-js")
 
 const ANIMEAV1_BASE = "https://animeav1.com"
-const TMDB_API_KEY = "56db0ec297530920213e1503706b81ff" // Api TMDB
+const TMDB_API_KEY = "56db0ec297530920213e1503706b81ff"
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 // Servidores soportados: nombre tal como aparece en el HTML/__data.json de
@@ -105,30 +105,38 @@ function buildSearchURL(query, page, year) {
 }
 
 /**
- * Descarga y parsea el HTML del catálogo/búsqueda de AnimeAV1 con cheerio.
- * (Adaptado 1:1 del addon original — AnimeAV1 no expone el catálogo vía __data.json
- * de forma fiable, así que aquí se usa scraping HTML directo.)
+ * Descarga y parsea el catálogo/búsqueda de AnimeAV1 vía regex, sin cheerio.
+ *
+ * El HTML de /catalogo NO expone los resultados vía __data.json de forma
+ * fiable con `search=` (confirmado: ese endpoint ignora el filtro y devuelve
+ * el catálogo completo sin filtrar). Los resultados reales están embebidos
+ * en un <script> dentro del HTML normal, como argumento de una función JS
+ * auto-ejecutada (IIFE) que arma cada resultado como:
+ *   { id: "...", title: "...", synopsis: "...", categoryId: N, slug: "..." }
+ * No es JSON válido (es código JS ejecutable, con una IIFE armando el objeto
+ * `category` compartido), así que se extrae campo por campo con regex, igual
+ * que ya se hace en el fallback HTML de getEpisodeServers.
  */
 async function searchAnimesBySpecificURL(url) {
   const html = await fetch(url, { headers: { "User-Agent": UA } }).then((resp) => {
     if (!resp.ok) throw Error(`HTTP error! Status: ${resp.status}`)
     return resp.text()
   })
-  const $ = cheerio.load(html)
 
-  const selectedElement = $("body > div > div.container > main > section > div > article")
+  // Cada resultado sigue el patrón: { id: "X", title: "Y", synopsis: "Z", categoryId: N, slug: "W" ...
+  // synopsis puede contener comillas escapadas (\") y saltos de línea (\n), contemplados en el regex.
+  const objBlockRegex = /\{\s*id:\s*"([^"]+)",\s*title:\s*"((?:[^"\\]|\\.)*)",\s*synopsis:\s*"((?:[^"\\]|\\.)*)",\s*categoryId:\s*\d+,\s*slug:\s*"([^"]+)"/g
+
   const media = []
-  selectedElement.each((_, el) => {
-    const href = $(el).find("a").attr("href")
-    if (!href) return
+  let m
+  while ((m = objBlockRegex.exec(html)) !== null) {
     media.push({
-      title: $(el).find("header > h3").text(),
-      cover: $(el).find("div > figure > img").attr("src"),
-      synopsis: $(el).find("div > div > div > p").eq(1).text(),
-      slug: href.replace("/media/", ""),
-      type: $(el).find("div > figure + div > div").text()
+      id: m[1],
+      title: m[2].replace(/\\"/g, '"').replace(/\\n/g, '\n'),
+      synopsis: m[3].replace(/\\"/g, '"').replace(/\\n/g, '\n'),
+      slug: m[4]
     })
-  })
+  }
 
   return { media }
 }
@@ -328,9 +336,10 @@ async function getEpisodeServers(slug, epNumber) {
       if (!resp.ok) throw Error(`HTTP error! Status: ${resp.status}`)
       return resp.text()
     })
-    const $ = cheerio.load(html)
-    const scripts = $("script")
-    const metadataJSON = scripts.map((_, el) => $(el).html()).get().find(s => s?.includes("kit.start(app, element, {"))
+    // Antes se usaba cheerio para localizar el <script> con kit.start(...);
+    // como solo hace falta encontrar ESE bloque de texto dentro del HTML
+    // completo (no navegar el DOM), una regex simple lo aísla igual de bien.
+    const metadataJSON = html.match(/kit\.start\(app,\s*element,\s*\{[\s\S]*/)?.[0]
 
     const serversObj = metadataJSON?.match(/embeds:\s?.*?SUB:\s?(\[.*?\])/)?.[1]
     const serversObjDUB = metadataJSON?.match(/embeds:\s?.*?DUB:\s?(\[.*?\])/)?.[1]
@@ -352,6 +361,28 @@ async function getEpisodeServers(slug, epNumber) {
   } catch (e) {
     console.error("[AnimeAV1] Error en fallback HTML:", e.message)
     return []
+  }
+}
+
+/**
+ * HLS/zilla-networks.
+ * Confirmado funcionando en producción (móvil y TV) gracias a los headers
+ * Sec-Fetch-Site/Mode/Dest, que Cloudflare exige en cada segmento del manifest
+ * para no responder 403 (con solo Referer + User-Agent los segmentos fallaban).
+ */
+async function extractZillaHLS(playUrl) {
+  const directUrl = playUrl.replace('/play/', '/m3u8/')
+  console.log(`[HLS-zilla] URL construida: ${directUrl}`)
+  return {
+    url: directUrl,
+    headers: {
+      "Referer": "https://player.zilla-networks.com/",
+      "Sec-Fetch-Site": "same-origin",
+      "Sec-Fetch-Mode": "cors",
+      "Sec-Fetch-Dest": "empty",
+      "User-Agent": UA
+    },
+    type: "hls"
   }
 }
 
@@ -386,24 +417,99 @@ async function extractMP4Upload(embedUrl) {
 }
 
 /**
- * HLS/zilla-networks — DIAGNÓSTICO, con headers Sec-Fetch-* añadidos.
- * Confirmado: el manifest .m3u8 responde 200, pero los segmentos (/segs/)
- * dieron 403 en una prueba anterior sin estos headers extra. Se prueba aquí
- * si Sec-Fetch-Site/Mode/Dest cambian ese resultado.
+ * UPNShare (https://animeav1.uns.bio/#<hash>)
+ *
+ * Portado de RpmvidExtractor.kt (proyecto Streamflix). El endpoint
+ * /api/v1/video no devuelve el video ni un manifest en claro: devuelve un
+ * payload hexadecimal que es JSON cifrado con AES-128/CBC/PKCS7 (clave e IV
+ * fijos, hardcodeados por el propio sitio — no son secretos nuestros).
+ * Una vez descifrado, el JSON trae una de varias rutas posibles:
+ *   - hls / hlsVideoTiktok -> manifest HLS relativo al dominio de uns.bio
+ *   - cf                   -> link "cf" (con posible firma k/kx o cfExpire)
+ *   - source                -> link directo
+ *
+ * IMPORTANTE: en la mayoría de los casos observados, la ruta resuelta es HLS.
+ * Eso significa que hereda el mismo riesgo que zilla-networks: si Cloudflare
+ * aplica una regla WAF agresiva a los segmentos de uns.bio, esto podría
+ * fallar en producción igual que zilla, incluso si el manifest se resuelve bien.
+ * No confirmado aún — a validar con pruebas reales.
  */
-async function extractZillaHLS(playUrl) {
-  const directUrl = playUrl.replace('/play/', '/m3u8/')
-  console.log(`[HLS-zilla][DIAGNÓSTICO] URL construida: ${directUrl}`)
+const UPN_AES_KEY = "kiemtienmua911ca" // 16 bytes -> AES-128
+const UPN_AES_IV = "1234567890oiuytr"  // 16 bytes
+
+function decryptUPNSharePayload(hexPayload) {
+  const key = CryptoJS.enc.Utf8.parse(UPN_AES_KEY)
+  const iv = CryptoJS.enc.Utf8.parse(UPN_AES_IV)
+  const cipherParams = CryptoJS.lib.CipherParams.create({ ciphertext: CryptoJS.enc.Hex.parse(hexPayload) })
+  const decrypted = CryptoJS.AES.decrypt(cipherParams, key, { iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 })
+  return decrypted.toString(CryptoJS.enc.Utf8)
+}
+
+async function extractUPNShare(embedUrl) {
+  const hashMatch = embedUrl.match(/#([^/?#]+)/)
+  const hash = hashMatch?.[1]
+  if (!hash) throw Error("No se pudo extraer el ID (hash) del embed de UPNShare")
+
+  const originMatch = embedUrl.match(/^(https?:\/\/[^/#?]+)/)
+  const origin = originMatch?.[1]
+  if (!origin) throw Error("No se pudo extraer el origin del embed de UPNShare")
+
+  const apiUrl = `${origin}/api/v1/video?id=${encodeURIComponent(hash)}&w=1920&h=1080&r=`
+  const resp = await fetch(apiUrl, { headers: { Referer: `${origin}/`, "User-Agent": UA } })
+  if (!resp.ok) throw Error(`HTTP error! Status: ${resp.status}`)
+  const hexPayload = await resp.text()
+
+  let json
+  try {
+    json = JSON.parse(decryptUPNSharePayload(hexPayload))
+  } catch (e) {
+    throw Error(`No se pudo descifrar/parsear el payload de UPNShare: ${e.message}`)
+  }
+
+  const hlsPath = json.hls || undefined
+  const hlsTiktok = json.hlsVideoTiktok || undefined
+  const sourcePath = json.source || undefined
+  let cfPath = json.cf || undefined
+  const cfExpire = json.cfExpire || undefined
+
+  let finalUrl, isHLS = false
+
+  if (hlsPath) {
+    finalUrl = `${origin}${hlsPath}`
+    isHLS = true
+  } else if (hlsTiktok) {
+    let v = "", domain = ""
+    try {
+      const config = JSON.parse(json.streamingConfig || "{}")
+      const tiktok = config?.adjust?.Tiktok
+      v = tiktok?.params?.v || ""
+      domain = tiktok?.domain || ""
+    } catch (_) { /* no-op */ }
+    const tiktokPath = (domain && hlsTiktok.startsWith('/hls/'))
+      ? hlsTiktok.replace('/hls/', `/hlsmod/${domain}/`)
+      : hlsTiktok
+    finalUrl = `${origin}${tiktokPath}${v ? `?v=${v}` : ''}`
+    isHLS = true
+  } else if (cfPath && !cfPath.includes('skyforgeconcepts.shop')) {
+    const pk = json.pk
+    if (pk?.k && pk?.kx) {
+      cfPath = `${cfPath}?k=${pk.k}&kx=${pk.kx}`
+    } else if (cfExpire) {
+      const [t, e] = String(cfExpire).split('::')
+      if (t && e) cfPath = `${cfPath}?t=${t}&e=${e}`
+    }
+    finalUrl = cfPath
+  } else if (sourcePath) {
+    finalUrl = sourcePath
+  } else {
+    throw Error("Payload de UPNShare sin hls, hlsVideoTiktok, cf ni source")
+  }
+
+  console.log(`[UPNShare] Resuelto (${isHLS ? 'HLS' : 'directo'}): ${finalUrl}`)
   return {
-    url: directUrl,
-    headers: {
-      "Referer": "https://player.zilla-networks.com/",
-      "Sec-Fetch-Site": "same-origin",
-      "Sec-Fetch-Mode": "cors",
-      "Sec-Fetch-Dest": "empty",
-      "User-Agent": UA
-    },
-    type: "hls"
+    url: finalUrl,
+    headers: { Referer: `${origin}/`, ...(isHLS ? {} : { Origin: origin }) },
+    type: isHLS ? "hls" : "mp4"
   }
 }
 
@@ -411,6 +517,7 @@ async function extractZillaHLS(playUrl) {
 // Para sumar un nuevo source: escribir su función extract(url) -> {url, headers}, y agregarlo aquí.
 Object.assign(SOURCE_EXTRACTORS, {
   MP4Upload: { label: "MP4Upload", extract: extractMP4Upload },
+  UPNShare: { label: "UPNShare", extract: extractUPNShare },
   HLS: { label: "HLS", extract: extractZillaHLS }
 })
 
