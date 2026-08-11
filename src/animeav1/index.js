@@ -592,7 +592,7 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
           name: `AnimeAV1`,
           title: `📺 ${source.label} | 1080p | WEB-DL |\n${getLangLabel(server.dub)}`,
           url: resolved.url,
-          quality: "1080p",
+          quality: `📺 ${source.label} | 1080p | WEB-DL |\n${getLangLabel(server.dub)}`,
           headers: resolved.headers,
           ...(resolved.type ? { type: resolved.type } : {})
         }
