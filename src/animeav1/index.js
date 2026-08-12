@@ -64,21 +64,82 @@ async function getSeasonYear(tmdbId, seasonNum) {
 }
 
 /**
- * Fallback de año vía Jikan (MyAnimeList), usado cuando TMDB no tiene el año
- * de la temporada (común en animes con temporadas "artificiales" en TMDB).
+ * Fallback de año vía AniList (GraphQL), usado solo cuando TMDB no tiene el
+ * año de la temporada (común en animes con temporadas "artificiales" en TMDB).
+ * Reemplaza a Jikan: Jikan requiere adivinar el formato exacto del sufijo de
+ * temporada en el título de búsqueda ("2nd Season" vs "Season 2", etc.), lo
+ * cual varía por anime y causaba fallos (ej. Re:Zero). AniList devuelve
+ * `seasonYear` como campo numérico estructurado, sin depender de parsear texto.
+ *
+ * Estrategia:
+ *  1. Buscar por el título base (en inglés, el que da TMDB).
+ *  2. Tomar el primer resultado como ancla y extraer su título romaji base
+ *     (sin sufijos de temporada) para filtrar solo entradas de la misma serie
+ *     — AniList devuelve también spin-offs/specials con nombres relacionados
+ *     pero distintos (ej. "Kyuukei Jikan (Break Time)" para Re:Zero).
+ *  3. Ordenar los candidatos filtrados cronológicamente por fecha de estreno
+ *     y devolver el año de la posición [seasonNum - 1] — asume que las
+ *     temporadas están numeradas en orden de emisión, igual que TMDB.
  */
-async function getJikanYear(title, seasonNum) {
+const ANILIST_SEASON_SUFFIX_RE = /\s+(?:\d+(?:st|nd|rd|th)\s+season|season\s+\d+(?:\s+part\s+\d+)?|part\s+\d+)\s*$/i
+
+function anilistBaseTitle(romaji) {
+  return romaji.replace(ANILIST_SEASON_SUFFIX_RE, '').trim()
+}
+
+async function getAniListYear(title, seasonNum) {
   try {
-    const query = seasonNum > 1 ? `${title} ${seasonNum}` : title
-    const url = `https://api.jikan.moe/v4/anime?q=${encodeURIComponent(query)}&limit=1`
-    const data = await fetch(url).then((r) => r.json())
-    const entry = data?.data?.[0]
-    if (!entry) { console.warn(`[Jikan] Sin resultados para "${query}"`); return undefined }
-    const year = entry.year ?? entry.aired?.prop?.from?.year ?? undefined
-    console.log(`[Jikan] "${entry.title}" year=${year}`)
-    return year
+    const query = `query ($search: String) {
+      Page(page: 1, perPage: 15) {
+        media(search: $search, type: ANIME, sort: SEARCH_MATCH) {
+          id
+          title { romaji english }
+          seasonYear
+          startDate { year month day }
+        }
+      }
+    }`
+    const resp = await fetch("https://graphql.anilist.co", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({ query, variables: { search: title } })
+    })
+    if (!resp.ok) throw Error(`HTTP error! Status: ${resp.status}`)
+    const json = await resp.json()
+    const results = json?.data?.Page?.media
+    if (!Array.isArray(results) || results.length === 0) {
+      console.warn(`[AniList] Sin resultados para "${title}"`)
+      return undefined
+    }
+
+    const anchor = results[0]
+    const baseRomaji = anilistBaseTitle(anchor.title?.romaji || '')
+    if (!baseRomaji) return undefined
+
+    const sameSeries = results.filter((m) => anilistBaseTitle(m.title?.romaji || '').toLowerCase() === baseRomaji.toLowerCase())
+
+    const withDate = sameSeries
+      .map((m) => {
+        const sd = m.startDate
+        const year = m.seasonYear ?? sd?.year
+        if (!year) return null
+        const sortKey = sd?.year ? `${sd.year}-${String(sd.month || 1).padStart(2, '0')}-${String(sd.day || 1).padStart(2, '0')}` : `${year}-01-01`
+        return { title: m.title?.romaji, year, sortKey }
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.sortKey.localeCompare(b.sortKey))
+
+    console.log(`[AniList] "${baseRomaji}" — ${withDate.length} temporada(s) encontradas: ${withDate.map(w => `${w.title}(${w.year})`).join(', ')}`)
+
+    const target = withDate[seasonNum - 1]
+    if (!target) {
+      console.warn(`[AniList] No hay entrada para temporada ${seasonNum} (solo ${withDate.length} encontradas)`)
+      return undefined
+    }
+    console.log(`[AniList] Temporada ${seasonNum} -> "${target.title}" year=${target.year}`)
+    return target.year
   } catch (e) {
-    console.warn(`[Jikan] Error: ${e.message}`)
+    console.warn(`[AniList] getAniListYear falló: ${e.message}`)
     return undefined
   }
 }
@@ -548,7 +609,8 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
     // temporada es una entrada de catálogo distinta, no un sub-item del slug base.
     const searchTerm = seasonNum !== 1 ? `${info.title} ${seasonNum}` : info.title
 
-    // Año de la temporada específica: TMDB primero, Jikan como respaldo.
+    // Año de la temporada específica: TMDB primero, AniList como respaldo
+    // (solo si TMDB falla/no tiene el dato — TMDB es la fuente principal).
     // Es lo que nos permite distinguir "Frieren T1 (2023)" de "Frieren T3 (2026)"
     // cuando ambas entradas del catálogo tienen títulos casi idénticos.
     let seasonYear
@@ -557,8 +619,8 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
     } else {
       seasonYear = await getSeasonYear(tmdbId, seasonNum)
       if (seasonYear === undefined) {
-        console.warn(`[AnimeAV1] TMDB sin año para temporada ${seasonNum}, probando Jikan`)
-        seasonYear = await getJikanYear(info.title, seasonNum)
+        console.warn(`[AnimeAV1] TMDB sin año para temporada ${seasonNum}, probando AniList`)
+        seasonYear = await getAniListYear(info.title, seasonNum)
       }
     }
 
@@ -592,7 +654,7 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
           name: `AnimeAV1`,
           title: `📺 ${source.label} | 1080p | WEB-DL |\n${getLangLabel(server.dub)}`,
           url: resolved.url,
-          quality: `📺 ${source.label} | 1080p | WEB-DL |\n${getLangLabel(server.dub)}`,
+          quality: `📺 ${source.label} | WEB-DL |\n${getLangLabel(server.dub)}`,
           headers: resolved.headers,
           ...(resolved.type ? { type: resolved.type } : {})
         }

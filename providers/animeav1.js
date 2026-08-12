@@ -5808,44 +5808,112 @@ function _getSeasonYear() {
   }));
   return _getSeasonYear.apply(this, arguments);
 }
-function getJikanYear(_x5, _x6) {
-  return _getJikanYear.apply(this, arguments);
+var ANILIST_SEASON_SUFFIX_RE = /\s+(?:\d+(?:st|nd|rd|th)\s+season|season\s+\d+(?:\s+part\s+\d+)?|part\s+\d+)\s*$/i;
+function anilistBaseTitle(romaji) {
+  return romaji.replace(ANILIST_SEASON_SUFFIX_RE, "").trim();
 }
-function _getJikanYear() {
-  _getJikanYear = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee5(title, seasonNum) {
-    var _a, _b, _c, _d, _e, _f, query, url, data, entry, year, _t4;
+function getAniListYear(_x5, _x6) {
+  return _getAniListYear.apply(this, arguments);
+}
+function _getAniListYear() {
+  _getAniListYear = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee5(title, seasonNum) {
+    var _a, _b, _c, query, resp, json, results, anchor, baseRomaji, sameSeries, withDate, target, _t4;
     return _regenerator().w(function (_context5) {
       while (1) switch (_context5.p = _context5.n) {
         case 0:
           _context5.p = 0;
-          query = seasonNum > 1 ? `${title} ${seasonNum}` : title;
-          url = `https://api.jikan.moe/v4/anime?q=${encodeURIComponent(query)}&limit=1`;
+          query = `query ($search: String) {
+      Page(page: 1, perPage: 15) {
+        media(search: $search, type: ANIME, sort: SEARCH_MATCH) {
+          id
+          title { romaji english }
+          seasonYear
+          startDate { year month day }
+        }
+      }
+    }`;
           _context5.n = 1;
-          return fetch(url).then(function (r) {
-            return r.json();
+          return fetch("https://graphql.anilist.co", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Accept": "application/json"
+            },
+            body: JSON.stringify({
+              query,
+              variables: {
+                search: title
+              }
+            })
           });
         case 1:
-          data = _context5.v;
-          entry = (_a = data == null ? void 0 : data.data) == null ? void 0 : _a[0];
-          if (entry) {
+          resp = _context5.v;
+          if (resp.ok) {
             _context5.n = 2;
             break;
           }
-          console.warn(`[Jikan] Sin resultados para "${query}"`);
-          return _context5.a(2, void 0);
+          throw Error(`HTTP error! Status: ${resp.status}`);
         case 2:
-          year = (_f = (_e = entry.year) != null ? _e : (_d = (_c = (_b = entry.aired) == null ? void 0 : _b.prop) == null ? void 0 : _c.from) == null ? void 0 : _d.year) != null ? _f : void 0;
-          console.log(`[Jikan] "${entry.title}" year=${year}`);
-          return _context5.a(2, year);
+          _context5.n = 3;
+          return resp.json();
         case 3:
-          _context5.p = 3;
+          json = _context5.v;
+          results = (_b = (_a = json == null ? void 0 : json.data) == null ? void 0 : _a.Page) == null ? void 0 : _b.media;
+          if (!(!Array.isArray(results) || results.length === 0)) {
+            _context5.n = 4;
+            break;
+          }
+          console.warn(`[AniList] Sin resultados para "${title}"`);
+          return _context5.a(2, void 0);
+        case 4:
+          anchor = results[0];
+          baseRomaji = anilistBaseTitle(((_c = anchor.title) == null ? void 0 : _c.romaji) || "");
+          if (baseRomaji) {
+            _context5.n = 5;
+            break;
+          }
+          return _context5.a(2, void 0);
+        case 5:
+          sameSeries = results.filter(function (m) {
+            var _a2;
+            return anilistBaseTitle(((_a2 = m.title) == null ? void 0 : _a2.romaji) || "").toLowerCase() === baseRomaji.toLowerCase();
+          });
+          withDate = sameSeries.map(function (m) {
+            var _a2, _b2;
+            var sd = m.startDate;
+            var year = (_a2 = m.seasonYear) != null ? _a2 : sd == null ? void 0 : sd.year;
+            if (!year) return null;
+            var sortKey = (sd == null ? void 0 : sd.year) ? `${sd.year}-${String(sd.month || 1).padStart(2, "0")}-${String(sd.day || 1).padStart(2, "0")}` : `${year}-01-01`;
+            return {
+              title: (_b2 = m.title) == null ? void 0 : _b2.romaji,
+              year,
+              sortKey
+            };
+          }).filter(Boolean).sort(function (a, b) {
+            return a.sortKey.localeCompare(b.sortKey);
+          });
+          console.log(`[AniList] "${baseRomaji}" \u2014 ${withDate.length} temporada(s) encontradas: ${withDate.map(function (w) {
+            return `${w.title}(${w.year})`;
+          }).join(", ")}`);
+          target = withDate[seasonNum - 1];
+          if (target) {
+            _context5.n = 6;
+            break;
+          }
+          console.warn(`[AniList] No hay entrada para temporada ${seasonNum} (solo ${withDate.length} encontradas)`);
+          return _context5.a(2, void 0);
+        case 6:
+          console.log(`[AniList] Temporada ${seasonNum} -> "${target.title}" year=${target.year}`);
+          return _context5.a(2, target.year);
+        case 7:
+          _context5.p = 7;
           _t4 = _context5.v;
-          console.warn(`[Jikan] Error: ${_t4.message}`);
+          console.warn(`[AniList] getAniListYear fall\xF3: ${_t4.message}`);
           return _context5.a(2, void 0);
       }
-    }, _callee5, null, [[0, 3]]);
+    }, _callee5, null, [[0, 7]]);
   }));
-  return _getJikanYear.apply(this, arguments);
+  return _getAniListYear.apply(this, arguments);
 }
 function sanitizeQuery(query) {
   return query.replace(/[-–—]/g, " ").replace(/['"  \u2018\u2019\u201c\u201d`´]/g, " ").replace(/[^a-zA-Z0-9áéíóúüñÁÉÍÓÚÜÑ\s]/g, " ").replace(/\s+/g, " ").trim();
@@ -6555,9 +6623,9 @@ exports.getStreams = /*#__PURE__*/function () {
             _context2.n = 8;
             break;
           }
-          console.warn(`[AnimeAV1] TMDB sin a\xF1o para temporada ${seasonNum}, probando Jikan`);
+          console.warn(`[AnimeAV1] TMDB sin a\xF1o para temporada ${seasonNum}, probando AniList`);
           _context2.n = 7;
-          return getJikanYear(info.title, seasonNum);
+          return getAniListYear(info.title, seasonNum);
         case 7:
           seasonYear = _context2.v;
         case 8:
@@ -6617,7 +6685,7 @@ exports.getStreams = /*#__PURE__*/function () {
                       title: `\u{1F4FA} ${source.label} | 1080p | WEB-DL |
 ${getLangLabel(server.dub)}`,
                       url: resolved.url,
-                      quality: "1080p",
+                      quality: `${source.label} 1080p`,
                       headers: resolved.headers
                     }, resolved.type ? {
                       type: resolved.type
