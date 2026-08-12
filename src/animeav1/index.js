@@ -5,7 +5,6 @@
 // Contrato Nuvio: exports.getStreams(tmdbId, type, season, episode) -> Promise<Array<Stream>>
 // Stream: { name, title, url, quality, headers? }
 
-const CryptoJS = require("crypto-js")
 
 const ANIMEAV1_BASE = "https://animeav1.com"
 const TMDB_API_KEY = "56db0ec297530920213e1503706b81ff"
@@ -487,109 +486,15 @@ async function extractMP4Upload(embedUrl) {
   }
 }
 
-/**
- * UPNShare (https://animeav1.uns.bio/#<hash>)
- *
- * Portado de RpmvidExtractor.kt (proyecto Streamflix). El endpoint
- * /api/v1/video no devuelve el video ni un manifest en claro: devuelve un
- * payload hexadecimal que es JSON cifrado con AES-128/CBC/PKCS7 (clave e IV
- * fijos, hardcodeados por el propio sitio — no son secretos nuestros).
- * Una vez descifrado, el JSON trae una de varias rutas posibles:
- *   - hls / hlsVideoTiktok -> manifest HLS relativo al dominio de uns.bio
- *   - cf                   -> link "cf" (con posible firma k/kx o cfExpire)
- *   - source                -> link directo
- *
- * IMPORTANTE: en la mayoría de los casos observados, la ruta resuelta es HLS.
- * Eso significa que hereda el mismo riesgo que zilla-networks: si Cloudflare
- * aplica una regla WAF agresiva a los segmentos de uns.bio, esto podría
- * fallar en producción igual que zilla, incluso si el manifest se resuelve bien.
- * No confirmado aún — a validar con pruebas reales.
- */
-const UPN_AES_KEY = "kiemtienmua911ca" // 16 bytes -> AES-128
-const UPN_AES_IV = "1234567890oiuytr"  // 16 bytes
-
-function decryptUPNSharePayload(hexPayload) {
-  const key = CryptoJS.enc.Utf8.parse(UPN_AES_KEY)
-  const iv = CryptoJS.enc.Utf8.parse(UPN_AES_IV)
-  const cipherParams = CryptoJS.lib.CipherParams.create({ ciphertext: CryptoJS.enc.Hex.parse(hexPayload) })
-  const decrypted = CryptoJS.AES.decrypt(cipherParams, key, { iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 })
-  return decrypted.toString(CryptoJS.enc.Utf8)
-}
-
-async function extractUPNShare(embedUrl) {
-  const hashMatch = embedUrl.match(/#([^/?#]+)/)
-  const hash = hashMatch?.[1]
-  if (!hash) throw Error("No se pudo extraer el ID (hash) del embed de UPNShare")
-
-  const originMatch = embedUrl.match(/^(https?:\/\/[^/#?]+)/)
-  const origin = originMatch?.[1]
-  if (!origin) throw Error("No se pudo extraer el origin del embed de UPNShare")
-
-  const apiUrl = `${origin}/api/v1/video?id=${encodeURIComponent(hash)}&w=1920&h=1080&r=`
-  const resp = await fetch(apiUrl, { headers: { Referer: `${origin}/`, "User-Agent": UA } })
-  if (!resp.ok) throw Error(`HTTP error! Status: ${resp.status}`)
-  const hexPayload = await resp.text()
-
-  let json
-  try {
-    json = JSON.parse(decryptUPNSharePayload(hexPayload))
-  } catch (e) {
-    throw Error(`No se pudo descifrar/parsear el payload de UPNShare: ${e.message}`)
-  }
-
-  const hlsPath = json.hls || undefined
-  const hlsTiktok = json.hlsVideoTiktok || undefined
-  const sourcePath = json.source || undefined
-  let cfPath = json.cf || undefined
-  const cfExpire = json.cfExpire || undefined
-
-  let finalUrl, isHLS = false
-
-  if (hlsPath) {
-    finalUrl = `${origin}${hlsPath}`
-    isHLS = true
-  } else if (hlsTiktok) {
-    let v = "", domain = ""
-    try {
-      const config = JSON.parse(json.streamingConfig || "{}")
-      const tiktok = config?.adjust?.Tiktok
-      v = tiktok?.params?.v || ""
-      domain = tiktok?.domain || ""
-    } catch (_) { /* no-op */ }
-    const tiktokPath = (domain && hlsTiktok.startsWith('/hls/'))
-      ? hlsTiktok.replace('/hls/', `/hlsmod/${domain}/`)
-      : hlsTiktok
-    finalUrl = `${origin}${tiktokPath}${v ? `?v=${v}` : ''}`
-    isHLS = true
-  } else if (cfPath && !cfPath.includes('skyforgeconcepts.shop')) {
-    const pk = json.pk
-    if (pk?.k && pk?.kx) {
-      cfPath = `${cfPath}?k=${pk.k}&kx=${pk.kx}`
-    } else if (cfExpire) {
-      const [t, e] = String(cfExpire).split('::')
-      if (t && e) cfPath = `${cfPath}?t=${t}&e=${e}`
-    }
-    finalUrl = cfPath
-  } else if (sourcePath) {
-    finalUrl = sourcePath
-  } else {
-    throw Error("Payload de UPNShare sin hls, hlsVideoTiktok, cf ni source")
-  }
-
-  console.log(`[UPNShare] Resuelto (${isHLS ? 'HLS' : 'directo'}): ${finalUrl}`)
-  return {
-    url: finalUrl,
-    headers: { Referer: `${origin}/`, ...(isHLS ? {} : { Origin: origin }) },
-    type: isHLS ? "hls" : "mp4"
-  }
-}
-
 // Registro de sources soportados: nombre (tal como aparece en AnimeAV1) -> { label, extract }
 // Para sumar un nuevo source: escribir su función extract(url) -> {url, headers}, y agregarlo aquí.
+// UPNShare removido por completo (junto con el descifrado AES/crypto-js): el
+// endpoint devolvía un payload que fallaba al parsear tras descifrar en
+// varios casos. Si se retoma en el futuro, revisar el historial de versiones
+// anteriores del código para recuperar la implementación con AES-128/CBC.
 Object.assign(SOURCE_EXTRACTORS, {
-  MP4Upload: { label: "MP4Upload", extract: extractMP4Upload },
-  UPNShare: { label: "UPNShare", extract: extractUPNShare },
-  HLS: { label: "HLS", extract: extractZillaHLS }
+  HLS: { label: "HLS", extract: extractZillaHLS },
+  MP4Upload: { label: "MP4Upload", extract: extractMP4Upload }
 })
 
 // ─────────────────────────────────────────────
@@ -658,6 +563,19 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
       return []
     }
 
+    // Orden de salida: primero por source (según el orden en que se registraron
+    // en SOURCE_EXTRACTORS, ej. HLS antes que MP4Upload), y dentro de cada
+    // source, SUB (japonés) antes que DUB (latino). Así el usuario ve
+    // "HLS japonés, HLS latino, MP4Upload japonés, MP4Upload latino", no el
+    // orden arbitrario en que el sitio los devuelve.
+    const sourceOrder = Object.keys(SOURCE_EXTRACTORS)
+    servers = [...servers].sort((a, b) => {
+      const aIdx = sourceOrder.findIndex((key) => a.name.includes(key))
+      const bIdx = sourceOrder.findIndex((key) => b.name.includes(key))
+      if (aIdx !== bIdx) return aIdx - bIdx
+      return (a.dub ? 1 : 0) - (b.dub ? 1 : 0) // false (SUB) antes que true (DUB)
+    })
+
     const results = await Promise.all(servers.map(async (server) => {
       const sourceKey = Object.keys(SOURCE_EXTRACTORS).find((key) => server.name.includes(key))
       const source = sourceKey ? SOURCE_EXTRACTORS[sourceKey] : null
@@ -665,11 +583,12 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
 
       try {
         const resolved = await source.extract(server.url)
+        const label = `📺 ${source.label} | 1080p | WEB-DL | ${getLangLabel(server.dub)}`
         return {
           name: `AnimeAV1`,
-          title: `📺 ${source.label} | 1080p | WEB-DL |\n${getLangLabel(server.dub)}`,
+          title: label,
           url: resolved.url,
-          quality: `${source.label} | 1080p | WEB-DL | ${getLangLabel(server.dub)}`,
+          quality: label,
           headers: resolved.headers,
           ...(resolved.type ? { type: resolved.type } : {})
         }
