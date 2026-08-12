@@ -6685,7 +6685,7 @@ exports.getStreams = /*#__PURE__*/function () {
                       title: `\u{1F4FA} ${source.label} | 1080p | WEB-DL |
 ${getLangLabel(server.dub)}`,
                       url: resolved.url,
-                      quality: `${source.label} 1080p`,
+                      quality: `${source.label} | 1080p | WEB-DL | ${getLangLabel(server.dub)}`,
                       headers: resolved.headers
                     }, resolved.type ? {
                       type: resolved.type

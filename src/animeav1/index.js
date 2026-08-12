@@ -604,9 +604,9 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
     if (!info) return []
 
     const seasonNum = type === "movie" ? 1 : (season ? Number(season) : 1)
-    // Clave del fix: para temporadas 2+, el término de búsqueda incluye el
-    // número de temporada (ej: "Frieren 3"), ya que en AnimeAV1 cada
-    // temporada es una entrada de catálogo distinta, no un sub-item del slug base.
+    // Para temporadas 2+, el término de búsqueda incluye el número de
+    // temporada (ej: "Frieren 3"), ya que en AnimeAV1 cada temporada es una
+    // entrada de catálogo distinta, no un sub-item del slug base.
     const searchTerm = seasonNum !== 1 ? `${info.title} ${seasonNum}` : info.title
 
     // Año de la temporada específica: TMDB primero, AniList como respaldo
@@ -654,7 +654,7 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
           name: `AnimeAV1`,
           title: `📺 ${source.label} | 1080p | WEB-DL |\n${getLangLabel(server.dub)}`,
           url: resolved.url,
-          quality: `📺 ${source.label} | WEB-DL |\n${getLangLabel(server.dub)}`,
+          quality: `${source.label} | 1080p | WEB-DL | ${getLangLabel(server.dub)}`,
           headers: resolved.headers,
           ...(resolved.type ? { type: resolved.type } : {})
         }
