@@ -5812,11 +5812,11 @@ var ANILIST_SEASON_SUFFIX_RE = /\s+(?:\d+(?:st|nd|rd|th)\s+season|season\s+\d+(?
 function anilistBaseTitle(romaji) {
   return romaji.replace(ANILIST_SEASON_SUFFIX_RE, "").trim();
 }
-function getAniListYear(_x5, _x6) {
-  return _getAniListYear.apply(this, arguments);
+function getAniListInfo(_x5, _x6) {
+  return _getAniListInfo.apply(this, arguments);
 }
-function _getAniListYear() {
-  _getAniListYear = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee5(title, seasonNum) {
+function _getAniListInfo() {
+  _getAniListInfo = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee5(title, seasonNum) {
     var _a, _b, _c, query, resp, json, results, anchor, baseRomaji, sameSeries, withDate, target, _t4;
     return _regenerator().w(function (_context5) {
       while (1) switch (_context5.p = _context5.n) {
@@ -5904,16 +5904,19 @@ function _getAniListYear() {
           return _context5.a(2, void 0);
         case 6:
           console.log(`[AniList] Temporada ${seasonNum} -> "${target.title}" year=${target.year}`);
-          return _context5.a(2, target.year);
+          return _context5.a(2, {
+            year: target.year,
+            romajiTitle: target.title
+          });
         case 7:
           _context5.p = 7;
           _t4 = _context5.v;
-          console.warn(`[AniList] getAniListYear fall\xF3: ${_t4.message}`);
+          console.warn(`[AniList] getAniListInfo fall\xF3: ${_t4.message}`);
           return _context5.a(2, void 0);
       }
     }, _callee5, null, [[0, 7]]);
   }));
-  return _getAniListYear.apply(this, arguments);
+  return _getAniListInfo.apply(this, arguments);
 }
 function sanitizeQuery(query) {
   return query.replace(/[-–—]/g, " ").replace(/['"  \u2018\u2019\u201c\u201d`´]/g, " ").replace(/[^a-zA-Z0-9áéíóúüñÁÉÍÓÚÜÑ\s]/g, " ").replace(/\s+/g, " ").trim();
@@ -6583,7 +6586,7 @@ var getLangLabel = function getLangLabel(dub) {
 };
 exports.getStreams = /*#__PURE__*/function () {
   var _ref = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee2(tmdbId, type, season, episode) {
-    var info, seasonNum, searchTerm, seasonYear, candidates, match, epNumber, servers, results, final, _t2;
+    var info, seasonNum, seasonYear, searchTerm, aniListInfo, candidates, match, epNumber, servers, results, final, _t2;
     return _regenerator().w(function (_context2) {
       while (1) switch (_context2.p = _context2.n) {
         case 0:
@@ -6625,9 +6628,13 @@ exports.getStreams = /*#__PURE__*/function () {
           }
           console.warn(`[AnimeAV1] TMDB sin a\xF1o para temporada ${seasonNum}, probando AniList`);
           _context2.n = 7;
-          return getAniListYear(info.title, seasonNum);
+          return getAniListInfo(info.title, seasonNum);
         case 7:
-          seasonYear = _context2.v;
+          aniListInfo = _context2.v;
+          if (aniListInfo) {
+            seasonYear = aniListInfo.year;
+            searchTerm = aniListInfo.romajiTitle;
+          }
         case 8:
           console.log(`[AnimeAV1] searchTerm="${searchTerm}" year=${seasonYear != null ? seasonYear : "ninguno"}`);
           _context2.n = 9;

@@ -71,6 +71,14 @@ async function getSeasonYear(tmdbId, seasonNum) {
  * cual varía por anime y causaba fallos (ej. Re:Zero). AniList devuelve
  * `seasonYear` como campo numérico estructurado, sin depender de parsear texto.
  *
+ * Además de resolver el año, devuelve el título ROMAJI real de esa temporada
+ * (ej. "Re:Zero kara Hajimeru Isekai Seikatsu 2nd Season"). Es importante
+ * usarlo para la búsqueda en AnimeAV1: el catálogo indexa solo por título
+ * romaji japonés, nunca por el título en inglés que da TMDB — confirmado con
+ * un caso real (Re:Zero) donde buscar con el título en inglés de TMDB no
+ * encontraba el anime en absoluto (ni con año aplicado), y terminaba
+ * eligiendo un resultado no relacionado por coincidencia parcial de palabras.
+ *
  * Estrategia:
  *  1. Buscar por el título base (en inglés, el que da TMDB).
  *  2. Tomar el primer resultado como ancla y extraer su título romaji base
@@ -78,8 +86,10 @@ async function getSeasonYear(tmdbId, seasonNum) {
  *     — AniList devuelve también spin-offs/specials con nombres relacionados
  *     pero distintos (ej. "Kyuukei Jikan (Break Time)" para Re:Zero).
  *  3. Ordenar los candidatos filtrados cronológicamente por fecha de estreno
- *     y devolver el año de la posición [seasonNum - 1] — asume que las
- *     temporadas están numeradas en orden de emisión, igual que TMDB.
+ *     y devolver el año + título romaji de la posición [seasonNum - 1] —
+ *     asume que las temporadas están numeradas en orden de emisión, igual que TMDB.
+ *
+ * @returns {Promise<{year: number, romajiTitle: string}|undefined>}
  */
 const ANILIST_SEASON_SUFFIX_RE = /\s+(?:\d+(?:st|nd|rd|th)\s+season|season\s+\d+(?:\s+part\s+\d+)?|part\s+\d+)\s*$/i
 
@@ -87,7 +97,7 @@ function anilistBaseTitle(romaji) {
   return romaji.replace(ANILIST_SEASON_SUFFIX_RE, '').trim()
 }
 
-async function getAniListYear(title, seasonNum) {
+async function getAniListInfo(title, seasonNum) {
   try {
     const query = `query ($search: String) {
       Page(page: 1, perPage: 15) {
@@ -137,9 +147,9 @@ async function getAniListYear(title, seasonNum) {
       return undefined
     }
     console.log(`[AniList] Temporada ${seasonNum} -> "${target.title}" year=${target.year}`)
-    return target.year
+    return { year: target.year, romajiTitle: target.title }
   } catch (e) {
-    console.warn(`[AniList] getAniListYear falló: ${e.message}`)
+    console.warn(`[AniList] getAniListInfo falló: ${e.message}`)
     return undefined
   }
 }
@@ -604,23 +614,28 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
     if (!info) return []
 
     const seasonNum = type === "movie" ? 1 : (season ? Number(season) : 1)
-    // Para temporadas 2+, el término de búsqueda incluye el número de
-    // temporada (ej: "Frieren 3"), ya que en AnimeAV1 cada temporada es una
-    // entrada de catálogo distinta, no un sub-item del slug base.
-    const searchTerm = seasonNum !== 1 ? `${info.title} ${seasonNum}` : info.title
 
     // Año de la temporada específica: TMDB primero, AniList como respaldo
     // (solo si TMDB falla/no tiene el dato — TMDB es la fuente principal).
     // Es lo que nos permite distinguir "Frieren T1 (2023)" de "Frieren T3 (2026)"
     // cuando ambas entradas del catálogo tienen títulos casi idénticos.
     let seasonYear
+    let searchTerm = seasonNum !== 1 ? `${info.title} ${seasonNum}` : info.title
+
     if (type === "movie") {
       seasonYear = info.year
     } else {
       seasonYear = await getSeasonYear(tmdbId, seasonNum)
       if (seasonYear === undefined) {
         console.warn(`[AnimeAV1] TMDB sin año para temporada ${seasonNum}, probando AniList`)
-        seasonYear = await getAniListYear(info.title, seasonNum)
+        const aniListInfo = await getAniListInfo(info.title, seasonNum)
+        if (aniListInfo) {
+          seasonYear = aniListInfo.year
+          // Clave: AnimeAV1 indexa por título ROMAJI japonés, nunca por el
+          // título en inglés que da TMDB — usar el romaji real de AniList en
+          // vez de "{título en inglés} {N}" (que no matchea nada en el sitio).
+          searchTerm = aniListInfo.romajiTitle
+        }
       }
     }
 
