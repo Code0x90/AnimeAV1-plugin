@@ -35,7 +35,47 @@ async function getTMDBInfo(tmdbId, type) {
   const dateStr = data.release_date || data.first_air_date
   const year = dateStr ? new Date(dateStr).getFullYear() : undefined
   if (!title) return null
-  return { title, year }
+
+  // origin_country: en /tv/{id} viene directo como array de códigos ISO
+  // (ej. ["JP"]); en /movie/{id} no existe ese campo, el equivalente es
+  // production_countries (array de {iso_3166_1, name}).
+  const originCountries = type === "movie"
+    ? (data.production_countries || []).map((c) => c.iso_3166_1)
+    : (data.origin_country || [])
+
+  // genres ya viene incluido en esta misma respuesta (sin request extra).
+  // Genre ID 16 = "Animation" en TMDB — no existe un género "Anime" separado,
+  // así que se usa como señal complementaria al país de origen (patrón
+  // recomendado por la propia comunidad de TMDB: Animation + Japón ≈ anime).
+  const genreIds = (data.genres || []).map((g) => g.id)
+  const isAnimation = genreIds.includes(16)
+
+  return { title, year, originCountries, isAnimation }
+}
+
+// Países de origen asociados a anime/animación asiática en TMDB. Se usa para
+// descartar temprano contenido que claramente no es anime (ahorra requests
+// inútiles a AnimeAV1 cuando alguien busca, por ejemplo, una serie occidental).
+const ASIAN_COUNTRIES = ['JP', 'CN', 'KR', 'TW', 'HK']
+
+function looksLikeAsianOrigin(originCountries) {
+  // Si TMDB no dio el dato, no bloqueamos — es mejor intentar la búsqueda
+  // igual que descartar por falta de información.
+  if (!Array.isArray(originCountries) || originCountries.length === 0) return true
+  return originCountries.some((c) => ASIAN_COUNTRIES.includes(c))
+}
+
+/**
+ * Filtro combinado: país asiático Y género Animation. Refuerza el filtro de
+ * origen — descarta, por ejemplo, dramas o series live-action japonesas que
+ * no son anime, además de contenido occidental. Si TMDB no trajo `genres`
+ * (no debería pasar en /movie/{id} o /tv/{id}, pero por seguridad), no
+ * bloqueamos solo por eso.
+ */
+function looksLikeAnime(info) {
+  if (!looksLikeAsianOrigin(info.originCountries)) return false
+  if (info.isAnimation === false) return false
+  return true
 }
 
 /**
@@ -517,6 +557,14 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
   try {
     const info = await getTMDBInfo(tmdbId, type)
     if (!info) return []
+
+    if (!looksLikeAnime(info)) {
+      const reason = !looksLikeAsianOrigin(info.originCountries)
+        ? `origen no asiático (${info.originCountries.join(', ') || 'desconocido'})`
+        : `sin género Animation`
+      console.log(`[AnimeAV1] Descartado (${reason}), omitiendo búsqueda: "${info.title}"`)
+      return []
+    }
 
     const seasonNum = type === "movie" ? 1 : (season ? Number(season) : 1)
 

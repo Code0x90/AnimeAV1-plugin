@@ -812,7 +812,7 @@ function getTMDBInfo(_x, _x2) {
 }
 function _getTMDBInfo() {
   _getTMDBInfo = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee3(tmdbId, type) {
-    var path, url, data, title, dateStr, year;
+    var path, url, data, title, dateStr, year, originCountries, genreIds, isAnimation;
     return _regenerator().w(function (_context3) {
       while (1) switch (_context3.n) {
         case 0:
@@ -843,14 +843,35 @@ function _getTMDBInfo() {
           }
           return _context3.a(2, null);
         case 3:
+          originCountries = type === "movie" ? (data.production_countries || []).map(function (c) {
+            return c.iso_3166_1;
+          }) : data.origin_country || [];
+          genreIds = (data.genres || []).map(function (g) {
+            return g.id;
+          });
+          isAnimation = genreIds.includes(16);
           return _context3.a(2, {
             title,
-            year
+            year,
+            originCountries,
+            isAnimation
           });
       }
     }, _callee3);
   }));
   return _getTMDBInfo.apply(this, arguments);
+}
+var ASIAN_COUNTRIES = ["JP", "CN", "KR", "TW", "HK"];
+function looksLikeAsianOrigin(originCountries) {
+  if (!Array.isArray(originCountries) || originCountries.length === 0) return true;
+  return originCountries.some(function (c) {
+    return ASIAN_COUNTRIES.includes(c);
+  });
+}
+function looksLikeAnime(info) {
+  if (!looksLikeAsianOrigin(info.originCountries)) return false;
+  if (info.isAnimation === false) return false;
+  return true;
 }
 function getSeasonYear(_x3, _x4) {
   return _getSeasonYear.apply(this, arguments);
@@ -1521,7 +1542,7 @@ var getLangLabel = function getLangLabel(dub) {
 };
 exports.getStreams = /*#__PURE__*/function () {
   var _ref = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee2(tmdbId, type, season, episode) {
-    var info, seasonNum, seasonYear, searchTerm, aniListInfo, candidates, match, epNumber, servers, sourceOrder, results, final, _t2;
+    var info, reason, seasonNum, seasonYear, searchTerm, aniListInfo, candidates, match, epNumber, servers, sourceOrder, results, final, _t2;
     return _regenerator().w(function (_context2) {
       while (1) switch (_context2.p = _context2.n) {
         case 0:
@@ -1543,63 +1564,71 @@ exports.getStreams = /*#__PURE__*/function () {
           }
           return _context2.a(2, []);
         case 4:
-          seasonNum = type === "movie" ? 1 : season ? Number(season) : 1;
-          searchTerm = seasonNum !== 1 ? `${info.title} ${seasonNum}` : info.title;
-          if (!(type === "movie")) {
+          if (looksLikeAnime(info)) {
             _context2.n = 5;
             break;
           }
-          seasonYear = info.year;
-          _context2.n = 8;
-          break;
+          reason = !looksLikeAsianOrigin(info.originCountries) ? `origen no asi\xE1tico (${info.originCountries.join(", ") || "desconocido"})` : `sin g\xE9nero Animation`;
+          console.log(`[AnimeAV1] Descartado (${reason}), omitiendo b\xFAsqueda: "${info.title}"`);
+          return _context2.a(2, []);
         case 5:
-          _context2.n = 6;
-          return getSeasonYear(tmdbId, seasonNum);
+          seasonNum = type === "movie" ? 1 : season ? Number(season) : 1;
+          searchTerm = seasonNum !== 1 ? `${info.title} ${seasonNum}` : info.title;
+          if (!(type === "movie")) {
+            _context2.n = 6;
+            break;
+          }
+          seasonYear = info.year;
+          _context2.n = 9;
+          break;
         case 6:
+          _context2.n = 7;
+          return getSeasonYear(tmdbId, seasonNum);
+        case 7:
           seasonYear = _context2.v;
           if (!(seasonYear === void 0)) {
-            _context2.n = 8;
+            _context2.n = 9;
             break;
           }
           console.warn(`[AnimeAV1] TMDB sin a\xF1o para temporada ${seasonNum}, probando AniList`);
-          _context2.n = 7;
+          _context2.n = 8;
           return getAniListInfo(info.title, seasonNum);
-        case 7:
+        case 8:
           aniListInfo = _context2.v;
           if (aniListInfo) {
             seasonYear = aniListInfo.year;
             searchTerm = aniListInfo.romajiTitle;
           }
-        case 8:
-          console.log(`[AnimeAV1] searchTerm="${searchTerm}" year=${seasonYear != null ? seasonYear : "ninguno"}`);
-          _context2.n = 9;
-          return searchAnimeAV1(searchTerm, seasonYear);
         case 9:
+          console.log(`[AnimeAV1] searchTerm="${searchTerm}" year=${seasonYear != null ? seasonYear : "ninguno"}`);
+          _context2.n = 10;
+          return searchAnimeAV1(searchTerm, seasonYear);
+        case 10:
           candidates = _context2.v;
           match = pickBestMatch(candidates, searchTerm, seasonNum);
           console.log(`[AnimeAV1] Match elegido: "${match.title}" (${match.slug})`);
           epNumber = type === "movie" ? 1 : episode !== void 0 ? Number(episode) : 1;
-          _context2.n = 10;
+          _context2.n = 11;
           return getEpisodeServers(match.slug, epNumber);
-        case 10:
+        case 11:
           servers = _context2.v;
           if (!(servers.length === 0 && type === "movie" && epNumber === 1)) {
-            _context2.n = 12;
+            _context2.n = 13;
             break;
           }
           console.warn(`[AnimeAV1] Reintentando pel\xEDcula con episodio 0`);
-          _context2.n = 11;
+          _context2.n = 12;
           return getEpisodeServers(match.slug, 0);
-        case 11:
-          servers = _context2.v;
         case 12:
+          servers = _context2.v;
+        case 13:
           if (!(servers.length === 0)) {
-            _context2.n = 13;
+            _context2.n = 14;
             break;
           }
           console.warn(`[AnimeAV1] Sin servidores soportados para "${match.title}"`);
           return _context2.a(2, []);
-        case 13:
+        case 14:
           sourceOrder = Object.keys(SOURCE_EXTRACTORS);
           servers = _toConsumableArray(servers).sort(function (a, b) {
             var aIdx = sourceOrder.findIndex(function (key) {
@@ -1611,7 +1640,7 @@ exports.getStreams = /*#__PURE__*/function () {
             if (aIdx !== bIdx) return aIdx - bIdx;
             return (a.dub ? 1 : 0) - (b.dub ? 1 : 0);
           });
-          _context2.n = 14;
+          _context2.n = 15;
           return Promise.all(servers.map(/*#__PURE__*/function () {
             var _ref2 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee(server) {
               var sourceKey, source, resolved, label, _t;
@@ -1655,18 +1684,18 @@ exports.getStreams = /*#__PURE__*/function () {
               return _ref2.apply(this, arguments);
             };
           }()));
-        case 14:
+        case 15:
           results = _context2.v;
           final = results.filter(Boolean);
           console.log(`[AnimeAV1] \u2713 ${final.length} streams devueltos`);
           return _context2.a(2, final);
-        case 15:
-          _context2.p = 15;
+        case 16:
+          _context2.p = 16;
           _t2 = _context2.v;
           console.error(`[AnimeAV1] Error: ${_t2.message}`);
           return _context2.a(2, []);
       }
-    }, _callee2, null, [[2, 15]]);
+    }, _callee2, null, [[2, 16]]);
   }));
   return function (_x12, _x13, _x14, _x15) {
     return _ref.apply(this, arguments);
