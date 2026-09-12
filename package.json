@@ -1,6 +1,6 @@
 {
     "name": "nuvio-providers",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "description": "Providers for Nuvio Streaming",
     "scripts": {
         "build": "node build.js",
@@ -15,6 +15,10 @@
         "nodemon": "^3.0.0",
         "regenerator-runtime": "^0.14.1"
     },
-    "keywords": ["nuvio", "streaming", "providers"],
+    "keywords": [
+        "nuvio",
+        "streaming",
+        "providers"
+    ],
     "license": "GPL-3.0"
 }
