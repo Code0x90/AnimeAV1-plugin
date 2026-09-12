@@ -532,9 +532,11 @@ async function extractMP4Upload(embedUrl) {
 // endpoint devolvía un payload que fallaba al parsear tras descifrar en
 // varios casos. Si se retoma en el futuro, revisar el historial de versiones
 // anteriores del código para recuperar la implementación con AES-128/CBC.
+// MP4Upload deshabilitado temporalmente (solo HLS activo por ahora) — el
+// código queda comentado, listo para reactivar agregando de nuevo la línea.
 Object.assign(SOURCE_EXTRACTORS, {
-  HLS: { label: "HLS", extract: extractZillaHLS },
-  MP4Upload: { label: "MP4Upload", extract: extractMP4Upload }
+  HLS: { label: "HLS", extract: extractZillaHLS }
+  // MP4Upload: { label: "MP4Upload", extract: extractMP4Upload }
 })
 
 // ─────────────────────────────────────────────
@@ -555,7 +557,17 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
   console.log(`[AnimeAV1] Buscando: TMDB ${tmdbId} (${type}) S${season ?? '-'}E${episode ?? '-'}`)
 
   try {
-    const info = await getTMDBInfo(tmdbId, type)
+    // seasonNum no depende de ningún fetch — se calcula primero para poder
+    // disparar getTMDBInfo y getSeasonYear en paralelo (antes se esperaba
+    // getTMDBInfo completo antes de siquiera empezar getSeasonYear, aunque
+    // ninguno depende del resultado del otro).
+    const seasonNum = type === "movie" ? 1 : (season ? Number(season) : 1)
+
+    const [info, tmdbSeasonYear] = await Promise.all([
+      getTMDBInfo(tmdbId, type),
+      // Para películas no existe temporada en TMDB — evitamos la llamada de más.
+      type === "movie" ? Promise.resolve(undefined) : getSeasonYear(tmdbId, seasonNum)
+    ])
     if (!info) return []
 
     if (!looksLikeAnime(info)) {
@@ -565,8 +577,6 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
       console.log(`[AnimeAV1] Descartado (${reason}), omitiendo búsqueda: "${info.title}"`)
       return []
     }
-
-    const seasonNum = type === "movie" ? 1 : (season ? Number(season) : 1)
 
     // Año de la temporada específica: TMDB primero, AniList como respaldo
     // (solo si TMDB falla/no tiene el dato — TMDB es la fuente principal).
@@ -578,7 +588,7 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
     if (type === "movie") {
       seasonYear = info.year
     } else {
-      seasonYear = await getSeasonYear(tmdbId, seasonNum)
+      seasonYear = tmdbSeasonYear
       if (seasonYear === undefined) {
         console.warn(`[AnimeAV1] TMDB sin año para temporada ${seasonNum}, probando AniList`)
         const aniListInfo = await getAniListInfo(info.title, seasonNum)
