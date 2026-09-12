@@ -766,6 +766,10 @@ function _toConsumableArray(r) { return _arrayWithoutHoles(r) || _iterableToArra
 function _nonIterableSpread() { throw new TypeError("Invalid attempt to spread non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method."); }
 function _iterableToArray(r) { if ("undefined" != typeof Symbol && null != r[Symbol.iterator] || null != r["@@iterator"]) return Array.from(r); }
 function _arrayWithoutHoles(r) { if (Array.isArray(r)) return _arrayLikeToArray(r); }
+function _slicedToArray(r, e) { return _arrayWithHoles(r) || _iterableToArrayLimit(r, e) || _unsupportedIterableToArray(r, e) || _nonIterableRest(); }
+function _nonIterableRest() { throw new TypeError("Invalid attempt to destructure non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method."); }
+function _iterableToArrayLimit(r, l) { var t = null == r ? null : "undefined" != typeof Symbol && r[Symbol.iterator] || r["@@iterator"]; if (null != t) { var e, n, i, u, a = [], f = !0, o = !1; try { if (i = (t = t.call(r)).next, 0 === l) { if (Object(t) !== t) return; f = !1; } else for (; !(f = (e = i.call(t)).done) && (a.push(e.value), a.length !== l); f = !0); } catch (r) { o = !0, n = r; } finally { try { if (!f && null != t.return && (u = t.return(), Object(u) !== u)) return; } finally { if (o) throw n; } } return a; } }
+function _arrayWithHoles(r) { if (Array.isArray(r)) return r; }
 function asyncGeneratorStep(n, t, e, r, o, a, c) { try { var i = n[a](c), u = i.value; } catch (n) { return void e(n); } i.done ? t(u) : Promise.resolve(u).then(r, o); }
 function _asyncToGenerator(n) { return function () { var t = this, e = arguments; return new Promise(function (r, o) { var a = n.apply(t, e); function _next(n) { asyncGeneratorStep(a, r, o, _next, _throw, "next", n); } function _throw(n) { asyncGeneratorStep(a, r, o, _next, _throw, "throw", n); } _next(void 0); }); }; }
 function _createForOfIteratorHelper(r, e) { var t = "undefined" != typeof Symbol && r[Symbol.iterator] || r["@@iterator"]; if (!t) { if (Array.isArray(r) || (t = _unsupportedIterableToArray(r)) || e && r && "number" == typeof r.length) { t && (r = t); var _n = 0, F = function F() {}; return { s: F, n: function n() { return _n >= r.length ? { done: !0 } : { done: !1, value: r[_n++] }; }, e: function e(r) { throw r; }, f: F }; } throw new TypeError("Invalid attempt to iterate non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method."); } var o, a = !0, u = !1; return { s: function s() { t = t.call(r); }, n: function n() { var r = t.next(); return a = r.done, r; }, e: function e(r) { u = !0, o = r; }, f: function f() { try { a || null == t.return || t.return(); } finally { if (u) throw o; } } }; }
@@ -1101,7 +1105,7 @@ function _searchAnimeAV() {
                 }
               }, _callee7);
             }));
-            return function runSearch(_x17) {
+            return function runSearch(_x16) {
               return _ref3.apply(this, arguments);
             };
           }();
@@ -1470,79 +1474,19 @@ function _extractZillaHLS() {
   }));
   return _extractZillaHLS.apply(this, arguments);
 }
-function extractMP4Upload(_x11) {
-  return _extractMP4Upload.apply(this, arguments);
-}
-function _extractMP4Upload() {
-  _extractMP4Upload = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee1(embedUrl) {
-    var origin, resp, data, match;
-    return _regenerator().w(function (_context1) {
-      while (1) switch (_context1.n) {
-        case 0:
-          origin = function () {
-            try {
-              return new URL(embedUrl).origin;
-            } catch (_) {
-              return "https://www.mp4upload.com";
-            }
-          }();
-          _context1.n = 1;
-          return fetch(embedUrl, {
-            headers: {
-              "Referer": origin,
-              "Origin": origin,
-              "User-Agent": UA
-            }
-          });
-        case 1:
-          resp = _context1.v;
-          if (resp.ok) {
-            _context1.n = 2;
-            break;
-          }
-          throw Error(`HTTP error! Status: ${resp.status}`);
-        case 2:
-          _context1.n = 3;
-          return resp.text();
-        case 3:
-          data = _context1.v;
-          match = /<script(?:.|\n)+?src:(?:.|\n)*?"(.+?\.mp4)"/g.exec(data);
-          if (!(!match || !match[1])) {
-            _context1.n = 4;
-            break;
-          }
-          throw Error("No se encontr\xF3 URL .mp4 en el embed de MP4Upload");
-        case 4:
-          console.log(`[MP4Upload] URL extra\xEDda: ${match[1]}`);
-          return _context1.a(2, {
-            url: match[1],
-            headers: {
-              Referer: "https://www.mp4upload.com",
-              Origin: "https://www.mp4upload.com",
-              "User-Agent": UA
-            }
-          });
-      }
-    }, _callee1);
-  }));
-  return _extractMP4Upload.apply(this, arguments);
-}
 Object.assign(SOURCE_EXTRACTORS, {
   HLS: {
     label: "HLS",
     extract: extractZillaHLS
-  },
-  MP4Upload: {
-    label: "MP4Upload",
-    extract: extractMP4Upload
   }
+  // MP4Upload: { label: "MP4Upload", extract: extractMP4Upload }
 });
 var getLangLabel = function getLangLabel(dub) {
   return dub ? "\u{1F1F2}\u{1F1FD} LATINO" : "\u{1F1EF}\u{1F1F5} JAPON\xC9S \xB7 \u{1F1F2}\u{1F1FD} Sub";
 };
 exports.getStreams = /*#__PURE__*/function () {
   var _ref = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee2(tmdbId, type, season, episode) {
-    var info, reason, seasonNum, seasonYear, searchTerm, aniListInfo, candidates, match, epNumber, servers, sourceOrder, results, final, _t2;
+    var seasonNum, _yield$Promise$all, _yield$Promise$all2, info, tmdbSeasonYear, reason, seasonYear, searchTerm, aniListInfo, candidates, match, epNumber, servers, sourceOrder, results, final, _t2;
     return _regenerator().w(function (_context2) {
       while (1) switch (_context2.p = _context2.n) {
         case 0:
@@ -1554,10 +1498,16 @@ exports.getStreams = /*#__PURE__*/function () {
         case 1:
           console.log(`[AnimeAV1] Buscando: TMDB ${tmdbId} (${type}) S${season != null ? season : "-"}E${episode != null ? episode : "-"}`);
           _context2.p = 2;
+          seasonNum = type === "movie" ? 1 : season ? Number(season) : 1;
           _context2.n = 3;
-          return getTMDBInfo(tmdbId, type);
+          return Promise.all([getTMDBInfo(tmdbId, type),
+          // Para películas no existe temporada en TMDB — evitamos la llamada de más.
+          type === "movie" ? Promise.resolve(void 0) : getSeasonYear(tmdbId, seasonNum)]);
         case 3:
-          info = _context2.v;
+          _yield$Promise$all = _context2.v;
+          _yield$Promise$all2 = _slicedToArray(_yield$Promise$all, 2);
+          info = _yield$Promise$all2[0];
+          tmdbSeasonYear = _yield$Promise$all2[1];
           if (info) {
             _context2.n = 4;
             break;
@@ -1572,63 +1522,59 @@ exports.getStreams = /*#__PURE__*/function () {
           console.log(`[AnimeAV1] Descartado (${reason}), omitiendo b\xFAsqueda: "${info.title}"`);
           return _context2.a(2, []);
         case 5:
-          seasonNum = type === "movie" ? 1 : season ? Number(season) : 1;
           searchTerm = seasonNum !== 1 ? `${info.title} ${seasonNum}` : info.title;
           if (!(type === "movie")) {
             _context2.n = 6;
             break;
           }
           seasonYear = info.year;
-          _context2.n = 9;
+          _context2.n = 8;
           break;
         case 6:
-          _context2.n = 7;
-          return getSeasonYear(tmdbId, seasonNum);
-        case 7:
-          seasonYear = _context2.v;
+          seasonYear = tmdbSeasonYear;
           if (!(seasonYear === void 0)) {
-            _context2.n = 9;
+            _context2.n = 8;
             break;
           }
           console.warn(`[AnimeAV1] TMDB sin a\xF1o para temporada ${seasonNum}, probando AniList`);
-          _context2.n = 8;
+          _context2.n = 7;
           return getAniListInfo(info.title, seasonNum);
-        case 8:
+        case 7:
           aniListInfo = _context2.v;
           if (aniListInfo) {
             seasonYear = aniListInfo.year;
             searchTerm = aniListInfo.romajiTitle;
           }
-        case 9:
+        case 8:
           console.log(`[AnimeAV1] searchTerm="${searchTerm}" year=${seasonYear != null ? seasonYear : "ninguno"}`);
-          _context2.n = 10;
+          _context2.n = 9;
           return searchAnimeAV1(searchTerm, seasonYear);
-        case 10:
+        case 9:
           candidates = _context2.v;
           match = pickBestMatch(candidates, searchTerm, seasonNum);
           console.log(`[AnimeAV1] Match elegido: "${match.title}" (${match.slug})`);
           epNumber = type === "movie" ? 1 : episode !== void 0 ? Number(episode) : 1;
-          _context2.n = 11;
+          _context2.n = 10;
           return getEpisodeServers(match.slug, epNumber);
-        case 11:
+        case 10:
           servers = _context2.v;
           if (!(servers.length === 0 && type === "movie" && epNumber === 1)) {
-            _context2.n = 13;
+            _context2.n = 12;
             break;
           }
           console.warn(`[AnimeAV1] Reintentando pel\xEDcula con episodio 0`);
-          _context2.n = 12;
+          _context2.n = 11;
           return getEpisodeServers(match.slug, 0);
-        case 12:
+        case 11:
           servers = _context2.v;
-        case 13:
+        case 12:
           if (!(servers.length === 0)) {
-            _context2.n = 14;
+            _context2.n = 13;
             break;
           }
           console.warn(`[AnimeAV1] Sin servidores soportados para "${match.title}"`);
           return _context2.a(2, []);
-        case 14:
+        case 13:
           sourceOrder = Object.keys(SOURCE_EXTRACTORS);
           servers = _toConsumableArray(servers).sort(function (a, b) {
             var aIdx = sourceOrder.findIndex(function (key) {
@@ -1640,7 +1586,7 @@ exports.getStreams = /*#__PURE__*/function () {
             if (aIdx !== bIdx) return aIdx - bIdx;
             return (a.dub ? 1 : 0) - (b.dub ? 1 : 0);
           });
-          _context2.n = 15;
+          _context2.n = 14;
           return Promise.all(servers.map(/*#__PURE__*/function () {
             var _ref2 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee(server) {
               var sourceKey, source, resolved, label, _t;
@@ -1680,24 +1626,24 @@ exports.getStreams = /*#__PURE__*/function () {
                 }
               }, _callee, null, [[1, 3]]);
             }));
-            return function (_x16) {
+            return function (_x15) {
               return _ref2.apply(this, arguments);
             };
           }()));
-        case 15:
+        case 14:
           results = _context2.v;
           final = results.filter(Boolean);
           console.log(`[AnimeAV1] \u2713 ${final.length} streams devueltos`);
           return _context2.a(2, final);
-        case 16:
-          _context2.p = 16;
+        case 15:
+          _context2.p = 15;
           _t2 = _context2.v;
           console.error(`[AnimeAV1] Error: ${_t2.message}`);
           return _context2.a(2, []);
       }
-    }, _callee2, null, [[2, 16]]);
+    }, _callee2, null, [[2, 15]]);
   }));
-  return function (_x12, _x13, _x14, _x15) {
+  return function (_x11, _x12, _x13, _x14) {
     return _ref.apply(this, arguments);
   };
 }();
