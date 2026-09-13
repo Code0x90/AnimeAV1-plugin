@@ -1612,7 +1612,7 @@ exports.getStreams = /*#__PURE__*/function () {
 1080p | WEB-DL | Anime
 ${getLangLabel(server.dub)}`;
                     return _context.a(2, __spreadValues({
-                      name: `AnimeAV1`,
+                      name: `Stream`,
                       title: label,
                       url: resolved.url,
                       quality: label,
