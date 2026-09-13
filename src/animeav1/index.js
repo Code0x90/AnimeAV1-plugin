@@ -643,7 +643,7 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
         const resolved = await source.extract(server.url)
         const label = `📺 ${source.label}\n1080p | WEB-DL | Anime\n${getLangLabel(server.dub)}`
         return {
-          name: `AnimeAV1`,
+          name: `Stream`,
           title: label,
           url: resolved.url,
           quality: label,
