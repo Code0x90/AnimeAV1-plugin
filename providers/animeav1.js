@@ -1608,7 +1608,9 @@ exports.getStreams = /*#__PURE__*/function () {
                     return source.extract(server.url);
                   case 2:
                     resolved = _context.v;
-                    label = `\u{1F4FA} ${source.label} | 1080p | WEB-DL | ${getLangLabel(server.dub)}`;
+                    label = `\u{1F4FA} ${source.label}
+1080p | WEB-DL | Anime
+${getLangLabel(server.dub)}`;
                     return _context.a(2, __spreadValues({
                       name: `AnimeAV1`,
                       title: label,
