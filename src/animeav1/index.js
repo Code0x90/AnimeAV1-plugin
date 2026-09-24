@@ -10,9 +10,19 @@ const ANIMEAV1_BASE = "https://animeav1.com"
 const TMDB_API_KEY = "56db0ec297530920213e1503706b81ff"
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
+// Switch de sources: true/false para activar o desactivar cada uno sin tocar
+// el resto del código. Se aplica al registrar SOURCE_EXTRACTORS más abajo —
+// un source en false ni siquiera se prueba/extrae para ese episodio.
+const ENABLED_SOURCES = {
+  HLS: true,
+  MP4Upload: true,
+  // UPNShare: false, // ver nota junto a su extractor: descifrado AES removido, habría que restaurarlo antes de activar
+}
+
 // Servidores soportados: nombre tal como aparece en el HTML/__data.json de
 // AnimeAV1 -> función extractora que resuelve el link directo reproducible.
-// Para sumar un nuevo source: 1) agregar su extractor más abajo, 2) agregarlo aquí.
+// Para sumar un nuevo source: 1) agregar su extractor más abajo, 2) agregarlo
+// al registro (con su entrada en ENABLED_SOURCES si quieres poder apagarlo).
 const SOURCE_EXTRACTORS = {} // se completa al final del archivo, una vez definidos los extractores
 
 // ─────────────────────────────────────────────
@@ -527,17 +537,22 @@ async function extractMP4Upload(embedUrl) {
 }
 
 // Registro de sources soportados: nombre (tal como aparece en AnimeAV1) -> { label, extract }
-// Para sumar un nuevo source: escribir su función extract(url) -> {url, headers}, y agregarlo aquí.
+// Para sumar un nuevo source: escribir su función extract(url) -> {url, headers},
+// agregarlo al objeto ALL_SOURCES de abajo, y su entrada en ENABLED_SOURCES
+// (arriba, al inicio del archivo) si quieres poder apagarlo/encenderlo.
 // UPNShare removido por completo (junto con el descifrado AES/crypto-js): el
 // endpoint devolvía un payload que fallaba al parsear tras descifrar en
 // varios casos. Si se retoma en el futuro, revisar el historial de versiones
 // anteriores del código para recuperar la implementación con AES-128/CBC.
-// MP4Upload deshabilitado temporalmente (solo HLS activo por ahora) — el
-// código queda comentado, listo para reactivar agregando de nuevo la línea.
-Object.assign(SOURCE_EXTRACTORS, {
-  HLS: { label: "HLS", extract: extractZillaHLS }
-  // MP4Upload: { label: "MP4Upload", extract: extractMP4Upload }
-})
+const ALL_SOURCES = {
+  HLS: { label: "HLS", extract: extractZillaHLS },
+  MP4Upload: { label: "MP4Upload", extract: extractMP4Upload }
+  // UPNShare: { label: "UPNShare", extract: extractUPNShare },
+}
+
+for (const [key, source] of Object.entries(ALL_SOURCES)) {
+  if (ENABLED_SOURCES[key]) SOURCE_EXTRACTORS[key] = source
+}
 
 // ─────────────────────────────────────────────
 // Entry point — contrato Nuvio
@@ -644,9 +659,9 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
         const label = `📺 ${source.label}\n1080p | WEB-DL | Anime\n${getLangLabel(server.dub)}`
         return {
           name: `AnimeAV1`,
-          title: label,
+          title: "",     // vacío por pedido: toda la info visible va en quality
           url: resolved.url,
-          quality: label,
+          quality: label, // label completo, ordenado, con \n reales entre líneas
           headers: resolved.headers,
           ...(resolved.type ? { type: resolved.type } : {})
         }
