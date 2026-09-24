@@ -810,6 +810,11 @@ var __spreadValues = function __spreadValues(a, b) {
 var ANIMEAV1_BASE = "https://animeav1.com";
 var TMDB_API_KEY = "56db0ec297530920213e1503706b81ff";
 var UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+var ENABLED_SOURCES = {
+  HLS: true,
+  MP4Upload: true
+  // UPNShare: false, // ver nota junto a su extractor: descifrado AES removido, habría que restaurarlo antes de activar
+};
 var SOURCE_EXTRACTORS = {};
 function getTMDBInfo(_x, _x2) {
   return _getTMDBInfo.apply(this, arguments);
@@ -1105,7 +1110,7 @@ function _searchAnimeAV() {
                 }
               }, _callee7);
             }));
-            return function runSearch(_x16) {
+            return function runSearch(_x17) {
               return _ref3.apply(this, arguments);
             };
           }();
@@ -1474,13 +1479,80 @@ function _extractZillaHLS() {
   }));
   return _extractZillaHLS.apply(this, arguments);
 }
-Object.assign(SOURCE_EXTRACTORS, {
+function extractMP4Upload(_x11) {
+  return _extractMP4Upload.apply(this, arguments);
+}
+function _extractMP4Upload() {
+  _extractMP4Upload = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee1(embedUrl) {
+    var origin, resp, data, match;
+    return _regenerator().w(function (_context1) {
+      while (1) switch (_context1.n) {
+        case 0:
+          origin = function () {
+            try {
+              return new URL(embedUrl).origin;
+            } catch (_) {
+              return "https://www.mp4upload.com";
+            }
+          }();
+          _context1.n = 1;
+          return fetch(embedUrl, {
+            headers: {
+              "Referer": origin,
+              "Origin": origin,
+              "User-Agent": UA
+            }
+          });
+        case 1:
+          resp = _context1.v;
+          if (resp.ok) {
+            _context1.n = 2;
+            break;
+          }
+          throw Error(`HTTP error! Status: ${resp.status}`);
+        case 2:
+          _context1.n = 3;
+          return resp.text();
+        case 3:
+          data = _context1.v;
+          match = /<script(?:.|\n)+?src:(?:.|\n)*?"(.+?\.mp4)"/g.exec(data);
+          if (!(!match || !match[1])) {
+            _context1.n = 4;
+            break;
+          }
+          throw Error("No se encontr\xF3 URL .mp4 en el embed de MP4Upload");
+        case 4:
+          console.log(`[MP4Upload] URL extra\xEDda: ${match[1]}`);
+          return _context1.a(2, {
+            url: match[1],
+            headers: {
+              Referer: "https://www.mp4upload.com",
+              Origin: "https://www.mp4upload.com",
+              "User-Agent": UA
+            }
+          });
+      }
+    }, _callee1);
+  }));
+  return _extractMP4Upload.apply(this, arguments);
+}
+var ALL_SOURCES = {
   HLS: {
     label: "HLS",
     extract: extractZillaHLS
+  },
+  MP4Upload: {
+    label: "MP4Upload",
+    extract: extractMP4Upload
   }
-  // MP4Upload: { label: "MP4Upload", extract: extractMP4Upload }
-});
+  // UPNShare: { label: "UPNShare", extract: extractUPNShare },
+};
+for (var _i2 = 0, _Object$entries = Object.entries(ALL_SOURCES); _i2 < _Object$entries.length; _i2++) {
+  var _Object$entries$_i = _slicedToArray(_Object$entries[_i2], 2),
+    key = _Object$entries$_i[0],
+    source = _Object$entries$_i[1];
+  if (ENABLED_SOURCES[key]) SOURCE_EXTRACTORS[key] = source;
+}
 var getLangLabel = function getLangLabel(dub) {
   return dub ? "\u{1F1F2}\u{1F1FD} LATINO" : "\u{1F1EF}\u{1F1F5} JAPON\xC9S \xB7 \u{1F1F2}\u{1F1FD} Sub";
 };
@@ -1613,9 +1685,11 @@ exports.getStreams = /*#__PURE__*/function () {
 ${getLangLabel(server.dub)}`;
                     return _context.a(2, __spreadValues({
                       name: `AnimeAV1`,
-                      title: label,
+                      title: "",
+                      // vacío por pedido: toda la info visible va en quality
                       url: resolved.url,
                       quality: label,
+                      // label completo, ordenado, con \n reales entre líneas
                       headers: resolved.headers
                     }, resolved.type ? {
                       type: resolved.type
@@ -1628,7 +1702,7 @@ ${getLangLabel(server.dub)}`;
                 }
               }, _callee, null, [[1, 3]]);
             }));
-            return function (_x15) {
+            return function (_x16) {
               return _ref2.apply(this, arguments);
             };
           }()));
@@ -1645,7 +1719,7 @@ ${getLangLabel(server.dub)}`;
       }
     }, _callee2, null, [[2, 15]]);
   }));
-  return function (_x11, _x12, _x13, _x14) {
+  return function (_x12, _x13, _x14, _x15) {
     return _ref.apply(this, arguments);
   };
 }();
