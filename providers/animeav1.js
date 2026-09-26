@@ -812,7 +812,8 @@ var TMDB_API_KEY = "56db0ec297530920213e1503706b81ff";
 var UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 var ENABLED_SOURCES = {
   HLS: true,
-  MP4Upload: true
+  MP4Upload: true,
+  Voe: true
   // UPNShare: false, // ver nota junto a su extractor: descifrado AES removido, habría que restaurarlo antes de activar
 };
 var SOURCE_EXTRACTORS = {};
@@ -1110,7 +1111,7 @@ function _searchAnimeAV() {
                 }
               }, _callee7);
             }));
-            return function runSearch(_x17) {
+            return function runSearch(_x18) {
               return _ref3.apply(this, arguments);
             };
           }();
@@ -1205,7 +1206,7 @@ function getEpisodeServers(_x0, _x1) {
 }
 function _getEpisodeServers() {
   _getEpisodeServers = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee9(slug, epNumber) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, ep, pageUrl, matchesSupportedSource2, resolveField2, resolveServer2, extractServers2, matchesSupportedSource, resolveField, resolveServer, extractServers, jsonUrl, resp, root, nodes, dataArray, _iterator3, _step3, node, hasEmbeds, episodeObj, embedsIndex, embeds, servers, subIndex, dubIndex, downloadsIndex, downloads, dlSubIndex, dlDubIndex, html, metadataJSON, serversObj, serversObjDUB, downloadObj, downloadObjDUB, raw, _servers, _t8, _t9, _t0;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, ep, pageUrl, matchesSupportedSource2, resolveField2, resolveServer2, extractServers2, matchesSupportedSource, resolveField, resolveServer, extractServers, jsonUrl, resp, root, nodes, dataArray, _iterator4, _step4, node, hasEmbeds, episodeObj, embedsIndex, embeds, servers, subIndex, dubIndex, downloadsIndex, downloads, dlSubIndex, dlDubIndex, html, metadataJSON, serversObj, serversObjDUB, downloadObj, downloadObjDUB, raw, _servers, _t8, _t9, _t0;
     return _regenerator().w(function (_context9) {
       while (1) switch (_context9.p = _context9.n) {
         case 0:
@@ -1241,11 +1242,11 @@ function _getEpisodeServers() {
           }, extractServers2 = function extractServers2(listOrIndex, dub) {
             var list = typeof listOrIndex === "number" ? dataArray[listOrIndex] : listOrIndex;
             if (!Array.isArray(list)) return;
-            var _iterator2 = _createForOfIteratorHelper(list),
-              _step2;
+            var _iterator3 = _createForOfIteratorHelper(list),
+              _step3;
             try {
-              for (_iterator2.s(); !(_step2 = _iterator2.n()).done;) {
-                var entry = _step2.value;
+              for (_iterator3.s(); !(_step3 = _iterator3.n()).done;) {
+                var entry = _step3.value;
                 var server = resolveServer2(entry);
                 if (!server || !server.url.startsWith("http")) continue;
                 if (!matchesSupportedSource2(server.name)) continue;
@@ -1257,9 +1258,9 @@ function _getEpisodeServers() {
                 console.log(`[AnimeAV1] Servidor detectado: ${server.name} (${dub ? "DUB" : "SUB"})`);
               }
             } catch (err) {
-              _iterator2.e(err);
+              _iterator3.e(err);
             } finally {
-              _iterator2.f();
+              _iterator3.f();
             }
           };
           matchesSupportedSource = matchesSupportedSource2, resolveField = resolveField2, resolveServer = resolveServer2, extractServers = extractServers2;
@@ -1291,15 +1292,15 @@ function _getEpisodeServers() {
           throw Error("No nodes in __data.json");
         case 5:
           dataArray = null;
-          _iterator3 = _createForOfIteratorHelper(nodes);
+          _iterator4 = _createForOfIteratorHelper(nodes);
           _context9.p = 6;
-          _iterator3.s();
+          _iterator4.s();
         case 7:
-          if ((_step3 = _iterator3.n()).done) {
+          if ((_step4 = _iterator4.n()).done) {
             _context9.n = 9;
             break;
           }
-          node = _step3.value;
+          node = _step4.value;
           if (!((node == null ? void 0 : node.data) && Array.isArray(node.data))) {
             _context9.n = 8;
             break;
@@ -1322,10 +1323,10 @@ function _getEpisodeServers() {
         case 10:
           _context9.p = 10;
           _t8 = _context9.v;
-          _iterator3.e(_t8);
+          _iterator4.e(_t8);
         case 11:
           _context9.p = 11;
-          _iterator3.f();
+          _iterator4.f();
           return _context9.f(11);
         case 12:
           if (dataArray) {
@@ -1479,27 +1480,54 @@ function _extractZillaHLS() {
   }));
   return _extractZillaHLS.apply(this, arguments);
 }
-function extractMP4Upload(_x11) {
-  return _extractMP4Upload.apply(this, arguments);
+var VOE_MARKERS = ["@$", "^^", "~@", "%?", "*~", "!!", "#&"];
+function voeRot13(str) {
+  return str.replace(/[a-zA-Z]/g, function (char) {
+    var code = char.charCodeAt(0);
+    var base = code <= 90 ? 65 : 97;
+    return String.fromCharCode((code - base + 13) % 26 + base);
+  });
 }
-function _extractMP4Upload() {
-  _extractMP4Upload = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee1(embedUrl) {
-    var origin, resp, data, match;
+function voeReplaceMarkers(str) {
+  var out = str;
+  var _iterator2 = _createForOfIteratorHelper(VOE_MARKERS),
+    _step2;
+  try {
+    for (_iterator2.s(); !(_step2 = _iterator2.n()).done;) {
+      var marker = _step2.value;
+      out = out.split(marker).join("_");
+    }
+  } catch (err) {
+    _iterator2.e(err);
+  } finally {
+    _iterator2.f();
+  }
+  return out;
+}
+function decodeVoePayload(rawValue) {
+  var x = voeRot13(rawValue);
+  x = voeReplaceMarkers(x);
+  x = x.split("_").join("");
+  x = atob(x);
+  x = Array.from(x).map(function (c) {
+    return String.fromCharCode((c.charCodeAt(0) - 3 + 256) % 256);
+  }).join("");
+  x = x.split("").reverse().join("");
+  x = atob(x);
+  return JSON.parse(x);
+}
+function extractVoe(_x11) {
+  return _extractVoe.apply(this, arguments);
+}
+function _extractVoe() {
+  _extractVoe = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee1(embedUrl) {
+    var _a, _b, resp, html, scriptMatch, jsonText, payloadArray, decoded, voeOrigin, hlsHeaders, mp4Headers, variants, fallbackFile, _t1, _t10;
     return _regenerator().w(function (_context1) {
-      while (1) switch (_context1.n) {
+      while (1) switch (_context1.p = _context1.n) {
         case 0:
-          origin = function () {
-            try {
-              return new URL(embedUrl).origin;
-            } catch (_) {
-              return "https://www.mp4upload.com";
-            }
-          }();
           _context1.n = 1;
           return fetch(embedUrl, {
             headers: {
-              "Referer": origin,
-              "Origin": origin,
               "User-Agent": UA
             }
           });
@@ -1514,16 +1542,133 @@ function _extractMP4Upload() {
           _context1.n = 3;
           return resp.text();
         case 3:
-          data = _context1.v;
+          html = _context1.v;
+          scriptMatch = html.match(/<script type="application\/json"[^>]*>([\s\S]*?)<\/script>/);
+          if (scriptMatch) {
+            _context1.n = 4;
+            break;
+          }
+          throw Error('No se encontr\xF3 el <script type="application/json"> en el embed de Voe');
+        case 4:
+          jsonText = scriptMatch[1].trim().replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#34;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+          _context1.p = 5;
+          payloadArray = JSON.parse(jsonText);
+          _context1.n = 7;
+          break;
+        case 6:
+          _context1.p = 6;
+          _t1 = _context1.v;
+          throw Error(`No se pudo parsear el array JSON del embed de Voe: ${_t1.message}`);
+        case 7:
+          if (!(!Array.isArray(payloadArray) || !payloadArray[0])) {
+            _context1.n = 8;
+            break;
+          }
+          throw Error("El embed de Voe no trajo el payload esperado");
+        case 8:
+          _context1.p = 8;
+          decoded = decodeVoePayload(payloadArray[0]);
+          _context1.n = 10;
+          break;
+        case 9:
+          _context1.p = 9;
+          _t10 = _context1.v;
+          throw Error(`No se pudo decodificar el payload de Voe: ${_t10.message}`);
+        case 10:
+          voeOrigin = function () {
+            try {
+              return new URL(embedUrl).origin;
+            } catch (_) {
+              return void 0;
+            }
+          }();
+          hlsHeaders = {
+            "Referer": voeOrigin ? `${voeOrigin}/` : embedUrl,
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Dest": "empty",
+            "User-Agent": UA
+          };
+          mp4Headers = {
+            "User-Agent": UA
+          };
+          variants = [];
+          if (decoded.source) {
+            console.log(`[Voe] HLS (source) extra\xEDdo: ${decoded.source}`);
+            variants.push({
+              url: decoded.source,
+              headers: hlsHeaders,
+              type: "hls",
+              variantLabel: "HLS"
+            });
+          }
+          fallbackFile = (_b = (_a = decoded.fallback) == null ? void 0 : _a[0]) == null ? void 0 : _b.file;
+          if (fallbackFile) {
+            console.log(`[Voe] MP4 (fallback) extra\xEDdo: ${fallbackFile}`);
+            variants.push({
+              url: fallbackFile,
+              headers: mp4Headers,
+              type: "mp4",
+              variantLabel: "MP4"
+            });
+          }
+          if (!(variants.length === 0)) {
+            _context1.n = 11;
+            break;
+          }
+          throw Error("El payload de Voe no trajo ni source ni fallback[0].file");
+        case 11:
+          return _context1.a(2, variants);
+      }
+    }, _callee1, null, [[8, 9], [5, 6]]);
+  }));
+  return _extractVoe.apply(this, arguments);
+}
+function extractMP4Upload(_x12) {
+  return _extractMP4Upload.apply(this, arguments);
+}
+function _extractMP4Upload() {
+  _extractMP4Upload = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee10(embedUrl) {
+    var origin, resp, data, match;
+    return _regenerator().w(function (_context10) {
+      while (1) switch (_context10.n) {
+        case 0:
+          origin = function () {
+            try {
+              return new URL(embedUrl).origin;
+            } catch (_) {
+              return "https://www.mp4upload.com";
+            }
+          }();
+          _context10.n = 1;
+          return fetch(embedUrl, {
+            headers: {
+              "Referer": origin,
+              "Origin": origin,
+              "User-Agent": UA
+            }
+          });
+        case 1:
+          resp = _context10.v;
+          if (resp.ok) {
+            _context10.n = 2;
+            break;
+          }
+          throw Error(`HTTP error! Status: ${resp.status}`);
+        case 2:
+          _context10.n = 3;
+          return resp.text();
+        case 3:
+          data = _context10.v;
           match = /<script(?:.|\n)+?src:(?:.|\n)*?"(.+?\.mp4)"/g.exec(data);
           if (!(!match || !match[1])) {
-            _context1.n = 4;
+            _context10.n = 4;
             break;
           }
           throw Error("No se encontr\xF3 URL .mp4 en el embed de MP4Upload");
         case 4:
           console.log(`[MP4Upload] URL extra\xEDda: ${match[1]}`);
-          return _context1.a(2, {
+          return _context10.a(2, {
             url: match[1],
             headers: {
               Referer: "https://www.mp4upload.com",
@@ -1532,7 +1677,7 @@ function _extractMP4Upload() {
             }
           });
       }
-    }, _callee1);
+    }, _callee10);
   }));
   return _extractMP4Upload.apply(this, arguments);
 }
@@ -1544,6 +1689,10 @@ var ALL_SOURCES = {
   MP4Upload: {
     label: "MP4Upload",
     extract: extractMP4Upload
+  },
+  Voe: {
+    label: "Voe",
+    extract: extractVoe
   }
   // UPNShare: { label: "UPNShare", extract: extractUPNShare },
 };
@@ -1661,7 +1810,7 @@ exports.getStreams = /*#__PURE__*/function () {
           _context2.n = 14;
           return Promise.all(servers.map(/*#__PURE__*/function () {
             var _ref2 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee(server) {
-              var sourceKey, source, resolved, label, _t;
+              var sourceKey, source, resolved, variantsList, _t;
               return _regenerator().w(function (_context) {
                 while (1) switch (_context.p = _context.n) {
                   case 0:
@@ -1680,20 +1829,24 @@ exports.getStreams = /*#__PURE__*/function () {
                     return source.extract(server.url);
                   case 2:
                     resolved = _context.v;
-                    label = `\u{1F4FA} ${source.label}
+                    variantsList = Array.isArray(resolved) ? resolved : [resolved];
+                    return _context.a(2, variantsList.map(function (variant) {
+                      var sourceLabel = variant.variantLabel ? `${source.label} (${variant.variantLabel})` : source.label;
+                      var label = `\u{1F4FA} ${sourceLabel}
 1080p | WEB-DL | Anime
 ${getLangLabel(server.dub)}`;
-                    return _context.a(2, __spreadValues({
-                      name: `AnimeAV1`,
-                      title: "",
-                      // vacío por pedido: toda la info visible va en quality
-                      url: resolved.url,
-                      quality: label,
-                      // label completo, ordenado, con \n reales entre líneas
-                      headers: resolved.headers
-                    }, resolved.type ? {
-                      type: resolved.type
-                    } : {}));
+                      return __spreadValues({
+                        name: `AnimeAV1`,
+                        title: "",
+                        // vacío por pedido: toda la info visible va en quality
+                        url: variant.url,
+                        quality: label,
+                        // label completo, ordenado, con \n reales entre líneas
+                        headers: variant.headers
+                      }, variant.type ? {
+                        type: variant.type
+                      } : {});
+                    }));
                   case 3:
                     _context.p = 3;
                     _t = _context.v;
@@ -1702,13 +1855,13 @@ ${getLangLabel(server.dub)}`;
                 }
               }, _callee, null, [[1, 3]]);
             }));
-            return function (_x16) {
+            return function (_x17) {
               return _ref2.apply(this, arguments);
             };
           }()));
         case 14:
           results = _context2.v;
-          final = results.filter(Boolean);
+          final = results.filter(Boolean).flat();
           console.log(`[AnimeAV1] \u2713 ${final.length} streams devueltos`);
           return _context2.a(2, final);
         case 15:
@@ -1719,7 +1872,7 @@ ${getLangLabel(server.dub)}`;
       }
     }, _callee2, null, [[2, 15]]);
   }));
-  return function (_x12, _x13, _x14, _x15) {
+  return function (_x13, _x14, _x15, _x16) {
     return _ref.apply(this, arguments);
   };
 }();
