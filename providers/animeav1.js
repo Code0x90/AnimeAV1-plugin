@@ -812,7 +812,7 @@ var TMDB_API_KEY = "56db0ec297530920213e1503706b81ff";
 var UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 var ENABLED_SOURCES = {
   HLS: true,
-  MP4Upload: true,
+  MP4Upload: false,
   Voe: true
   // UPNShare: false, // ver nota junto a su extractor: descifrado AES removido, habría que restaurarlo antes de activar
 };
