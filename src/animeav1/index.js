@@ -16,6 +16,7 @@ const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 const ENABLED_SOURCES = {
   HLS: true,
   MP4Upload: true,
+  Voe: true,
   // UPNShare: false, // ver nota junto a su extractor: descifrado AES removido, habría que restaurarlo antes de activar
 }
 
@@ -513,6 +514,119 @@ async function extractZillaHLS(playUrl) {
 // ─────────────────────────────────────────────
 
 /**
+ * Voe (https://voe.sx/e/<code>, redirige a un dominio espejo variable, ej.
+ * jamesbornmain.com). El HTML del embed trae un <script type="application/json">
+ * con un array de un solo string ofuscado. Pipeline de decodificación
+ * confirmado leyendo el propio loader del sitio (loader.a40897e.js):
+ *   ROT13 -> reemplazar 7 marcadores literales por "_" -> quitar "_"
+ *   -> atob -> restar 3 al code de cada char -> invertir string -> atob
+ *   -> JSON.parse
+ * El JSON resultante trae DOS variantes reproducibles:
+ *   - source           -> manifest HLS (.m3u8)
+ *   - fallback[0].file -> MP4 directo
+ * Se devuelven ambas (en vez de un solo objeto) para comparar cuál es más
+ * confiable en producción; `direct_access_url` se ignora a propósito porque
+ * el propio JSON marca `direct_access_allowed: false`.
+ */
+const VOE_MARKERS = ['@$', '^^', '~@', '%?', '*~', '!!', '#&']
+
+function voeRot13(str) {
+  return str.replace(/[a-zA-Z]/g, (char) => {
+    const code = char.charCodeAt(0)
+    const base = code <= 90 ? 65 : 97
+    return String.fromCharCode((code - base + 13) % 26 + base)
+  })
+}
+
+function voeReplaceMarkers(str) {
+  let out = str
+  for (const marker of VOE_MARKERS) {
+    out = out.split(marker).join('_')
+  }
+  return out
+}
+
+function decodeVoePayload(rawValue) {
+  let x = voeRot13(rawValue)
+  x = voeReplaceMarkers(x)
+  x = x.split('_').join('')
+  x = atob(x)
+  x = Array.from(x).map((c) => String.fromCharCode((c.charCodeAt(0) - 3 + 256) % 256)).join('')
+  x = x.split('').reverse().join('')
+  x = atob(x)
+  return JSON.parse(x)
+}
+
+// extractVoe devuelve un ARRAY (a diferencia de los demás extractores, que
+// devuelven un solo objeto), porque de un mismo embed salen dos variantes
+// reproducibles (HLS y MP4) que queremos comparar en producción.
+async function extractVoe(embedUrl) {
+  // El fetch sigue la redirección normal (voe.sx -> dominio espejo real).
+  const resp = await fetch(embedUrl, { headers: { "User-Agent": UA } })
+  if (!resp.ok) throw Error(`HTTP error! Status: ${resp.status}`)
+  const html = await resp.text()
+
+  const scriptMatch = html.match(/<script type="application\/json"[^>]*>([\s\S]*?)<\/script>/)
+  if (!scriptMatch) throw Error("No se encontró el <script type=\"application/json\"> en el embed de Voe")
+
+  // El HTML puede traer el contenido con entidades HTML sin decodificar
+  // (&amp; en vez de &, &#34; en vez de "), lo cual además coincide
+  // parcialmente con uno de los marcadores de ofuscación (#&) — hay que
+  // decodificar las entidades HTML antes de parsear el array JSON.
+  const jsonText = scriptMatch[1]
+    .trim()
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#34;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+
+  let payloadArray
+  try {
+    payloadArray = JSON.parse(jsonText)
+  } catch (e) {
+    throw Error(`No se pudo parsear el array JSON del embed de Voe: ${e.message}`)
+  }
+  if (!Array.isArray(payloadArray) || !payloadArray[0]) {
+    throw Error("El embed de Voe no trajo el payload esperado")
+  }
+
+  let decoded
+  try {
+    decoded = decodeVoePayload(payloadArray[0])
+  } catch (e) {
+    throw Error(`No se pudo decodificar el payload de Voe: ${e.message}`)
+  }
+
+  const voeOrigin = (() => { try { return new URL(embedUrl).origin } catch (_) { return undefined } })()
+  // Mismos headers Sec-Fetch-* que confirmamos necesarios para zilla-networks
+  // (Cloudflare/CDNs similares suelen exigirlos en los segmentos del manifest).
+  const hlsHeaders = {
+    "Referer": voeOrigin ? `${voeOrigin}/` : embedUrl,
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Dest": "empty",
+    "User-Agent": UA
+  }
+  const mp4Headers = { "User-Agent": UA }
+
+  const variants = []
+  if (decoded.source) {
+    console.log(`[Voe] HLS (source) extraído: ${decoded.source}`)
+    variants.push({ url: decoded.source, headers: hlsHeaders, type: "hls", variantLabel: "HLS" })
+  }
+  const fallbackFile = decoded.fallback?.[0]?.file
+  if (fallbackFile) {
+    console.log(`[Voe] MP4 (fallback) extraído: ${fallbackFile}`)
+    variants.push({ url: fallbackFile, headers: mp4Headers, type: "mp4", variantLabel: "MP4" })
+  }
+  if (variants.length === 0) throw Error("El payload de Voe no trajo ni source ni fallback[0].file")
+
+  return variants
+}
+
+/**
  * MP4Upload (https://www.mp4upload.com/embed-xxxx.html)
  * Extrae la URL directa del .mp4 parseando el script inline del reproductor.
  */
@@ -537,16 +651,18 @@ async function extractMP4Upload(embedUrl) {
 }
 
 // Registro de sources soportados: nombre (tal como aparece en AnimeAV1) -> { label, extract }
-// Para sumar un nuevo source: escribir su función extract(url) -> {url, headers},
-// agregarlo al objeto ALL_SOURCES de abajo, y su entrada en ENABLED_SOURCES
-// (arriba, al inicio del archivo) si quieres poder apagarlo/encenderlo.
+// Para sumar un nuevo source: escribir su función extract(url) -> {url, headers}
+// (o un array de esos objetos, como hace Voe), agregarlo al objeto
+// ALL_SOURCES de abajo, y su entrada en ENABLED_SOURCES (arriba, al inicio
+// del archivo) si quieres poder apagarlo/encenderlo.
 // UPNShare removido por completo (junto con el descifrado AES/crypto-js): el
 // endpoint devolvía un payload que fallaba al parsear tras descifrar en
 // varios casos. Si se retoma en el futuro, revisar el historial de versiones
 // anteriores del código para recuperar la implementación con AES-128/CBC.
 const ALL_SOURCES = {
   HLS: { label: "HLS", extract: extractZillaHLS },
-  MP4Upload: { label: "MP4Upload", extract: extractMP4Upload }
+  MP4Upload: { label: "MP4Upload", extract: extractMP4Upload },
+  Voe: { label: "Voe", extract: extractVoe }
   // UPNShare: { label: "UPNShare", extract: extractUPNShare },
 }
 
@@ -656,22 +772,30 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
 
       try {
         const resolved = await source.extract(server.url)
-        const label = `📺 ${source.label}\n1080p | WEB-DL | Anime\n${getLangLabel(server.dub)}`
-        return {
-          name: `AnimeAV1`,
-          title: "",     // vacío por pedido: toda la info visible va en quality
-          url: resolved.url,
-          quality: label, // label completo, ordenado, con \n reales entre líneas
-          headers: resolved.headers,
-          ...(resolved.type ? { type: resolved.type } : {})
-        }
+        // Algunos extractores (ej. Voe) devuelven un array de variantes
+        // reproducibles del mismo servidor (HLS y MP4); el resto devuelve
+        // un solo objeto. Se normaliza a array para procesar igual.
+        const variantsList = Array.isArray(resolved) ? resolved : [resolved]
+
+        return variantsList.map((variant) => {
+          const sourceLabel = variant.variantLabel ? `${source.label} (${variant.variantLabel})` : source.label
+          const label = `📺 ${sourceLabel}\n1080p | WEB-DL | Anime\n${getLangLabel(server.dub)}`
+          return {
+            name: `AnimeAV1`,
+            title: "",     // vacío por pedido: toda la info visible va en quality
+            url: variant.url,
+            quality: label, // label completo, ordenado, con \n reales entre líneas
+            headers: variant.headers,
+            ...(variant.type ? { type: variant.type } : {})
+          }
+        })
       } catch (e) {
         console.warn(`[${source.label}] Falló resolviendo un servidor: ${e.message}`)
         return null
       }
     }))
 
-    const final = results.filter(Boolean)
+    const final = results.filter(Boolean).flat()
     console.log(`[AnimeAV1] ✓ ${final.length} streams devueltos`)
     return final
   } catch (e) {
