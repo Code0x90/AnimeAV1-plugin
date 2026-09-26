@@ -561,10 +561,29 @@ function decodeVoePayload(rawValue) {
 // devuelven un solo objeto), porque de un mismo embed salen dos variantes
 // reproducibles (HLS y MP4) que queremos comparar en producción.
 async function extractVoe(embedUrl) {
-  // El fetch sigue la redirección normal (voe.sx -> dominio espejo real).
-  const resp = await fetch(embedUrl, { headers: { "User-Agent": UA } })
+  // El fetch sigue la redirección HTTP normal, pero VOE también puede
+  // devolver una página intermedia que redirige mediante JavaScript.
+  let resp = await fetch(embedUrl, {
+    headers: { "User-Agent": UA }
+  })
   if (!resp.ok) throw Error(`HTTP error! Status: ${resp.status}`)
-  const html = await resp.text()
+
+  let html = await resp.text()
+
+  // fetch() no ejecuta JavaScript, así que seguimos manualmente la redirección
+  // window.location.href que usa VOE.
+  const jsRedirect = html.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/)
+  if (jsRedirect) {
+    const redirectUrl = jsRedirect[1]
+    console.log(`[Voe] Redirección JS detectada: ${redirectUrl}`)
+
+    resp = await fetch(redirectUrl, {
+      headers: { "User-Agent": UA }
+    })
+    if (!resp.ok) throw Error(`HTTP error! Status: ${resp.status}`)
+
+    html = await resp.text()
+  }
 
   const scriptMatch = html.match(/<script type="application\/json"[^>]*>([\s\S]*?)<\/script>/)
   if (!scriptMatch) throw Error("No se encontró el <script type=\"application/json\"> en el embed de Voe")
