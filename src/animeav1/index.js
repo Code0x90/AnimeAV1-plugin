@@ -15,7 +15,7 @@ const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 // un source en false ni siquiera se prueba/extrae para ese episodio.
 const ENABLED_SOURCES = {
   HLS: true,
-  MP4Upload: true,
+  MP4Upload: false,
   Voe: true,
   // UPNShare: false, // ver nota junto a su extractor: descifrado AES removido, habría que restaurarlo antes de activar
 }
