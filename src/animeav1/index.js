@@ -1,6 +1,6 @@
 // providers/animeav1.js
 // Provider Nuvio para AnimeAV1 (https://animeav1.com)
-// Único source: MP4Upload (sin HLS/zilla-networks — bloqueado por Cloudflare a nivel de segmentos)
+// Sources: HLS-zilla y Voe HLS
 //
 // Contrato Nuvio: exports.getStreams(tmdbId, type, season, episode) -> Promise<Array<Stream>>
 // Stream: { name, title, url, quality, headers? }
@@ -246,7 +246,7 @@ async function searchAnimesBySpecificURL(url) {
 
   // Cada resultado sigue el patrón: { id: "X", title: "Y", synopsis: "Z", categoryId: N, slug: "W" ...
   // synopsis puede contener comillas escapadas (\") y saltos de línea (\n), contemplados en el regex.
-  const objBlockRegex = /\{\s*id:\s*"([^"]+)",\s*title:\s*"((?:[^"\\]|\\.)*)",\s*synopsis:\s*"((?:[^"\\]|\\.)*)",\s*categoryId:\s*\d+,\s*slug:\s*"([^"]+)"/g
+  const objBlockRegex = /\{\s*id:\s*"([^"]+)",\s*title:\s*"((?:[^"\\]|\\.)*)",\s*synopsis:\s*"((?:[^"\\]|\\.)*)",\s*categoryId:\s*(\d+),\s*slug:\s*"([^"]+)"/g
 
   const media = []
   let m
@@ -255,7 +255,8 @@ async function searchAnimesBySpecificURL(url) {
       id: m[1],
       title: m[2].replace(/\\"/g, '"').replace(/\\n/g, '\n'),
       synopsis: m[3].replace(/\\"/g, '"').replace(/\\n/g, '\n'),
-      slug: m[4]
+      categoryId: Number(m[4]),
+      slug: m[5]
     })
   }
 
@@ -318,7 +319,7 @@ const HIGHER_SEASON_PATTERNS = [
  * @param {string} searchTerm - término de búsqueda ya con temporada incluida si aplica (ej: "Frieren 3")
  * @param {number} seasonNum
  */
-function pickBestMatch(candidates, searchTerm, seasonNum) {
+function pickBestMatch(candidates, searchTerm, seasonNum, type) {
   const norm = (s) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
 
   let pool = candidates
@@ -327,6 +328,15 @@ function pickBestMatch(candidates, searchTerm, seasonNum) {
     // (por ejemplo si el catálogo no tiene la T1 pero sí la T2 con título similar).
     const filtered = candidates.filter((c) => !HIGHER_SEASON_PATTERNS.some((p) => p.test(c.title)))
     if (filtered.length > 0) pool = filtered
+  }
+
+  // AnimeAV1 devuelve también especiales/OVAs en la misma búsqueda.
+  // Para una serie de TV, categoría 1 = TV Anime; si existe al menos un
+  // candidato de esa categoría, no permitimos que un Especial (p.ej.
+  // "Re:Zero kara Hajimeru Break Time") gane simplemente por aparecer primero.
+  if (type === "tv") {
+    const tvCandidates = pool.filter((c) => c.categoryId === 1)
+    if (tvCandidates.length > 0) pool = tvCandidates
   }
 
   const target = norm(searchTerm)
@@ -343,7 +353,7 @@ function pickBestMatch(candidates, searchTerm, seasonNum) {
 
 /**
  * Obtiene la lista de servidores (embeds SUB/DUB) de un episodio dado.
- * Solo nos interesa el servidor "MP4Upload".
+ * Solo se procesan los servidores habilitados en ENABLED_SOURCES.
  */
 async function getEpisodeServers(slug, epNumber) {
   const ep = (epNumber !== undefined && epNumber !== null) ? Number(epNumber) : 1
@@ -557,9 +567,7 @@ function decodeVoePayload(rawValue) {
   return JSON.parse(x)
 }
 
-// extractVoe devuelve un ARRAY (a diferencia de los demás extractores, que
-// devuelven un solo objeto), porque de un mismo embed salen dos variantes
-// reproducibles (HLS y MP4) que queremos comparar en producción.
+// extractVoe devuelve un objeto reproducible con HLS.
 async function extractVoe(embedUrl) {
   // El fetch sigue la redirección HTTP normal, pero VOE también puede
   // devolver una página intermedia que redirige mediante JavaScript.
@@ -628,21 +636,15 @@ async function extractVoe(embedUrl) {
     "Sec-Fetch-Dest": "empty",
     "User-Agent": UA
   }
-  const mp4Headers = { "User-Agent": UA }
+  if (!decoded.source) throw Error("El payload de Voe no trajo source HLS")
 
-  const variants = []
-  if (decoded.source) {
-    console.log(`[Voe] HLS (source) extraído: ${decoded.source}`)
-    variants.push({ url: decoded.source, headers: hlsHeaders, type: "hls", variantLabel: "HLS" })
+  console.log(`[Voe] HLS (source) extraído: ${decoded.source}`)
+  return {
+    url: decoded.source,
+    headers: hlsHeaders,
+    type: "hls",
+    variantLabel: "HLS"
   }
-  const fallbackFile = decoded.fallback?.[0]?.file
-  if (fallbackFile) {
-    console.log(`[Voe] MP4 (fallback) extraído: ${fallbackFile}`)
-    variants.push({ url: fallbackFile, headers: mp4Headers, type: "mp4", variantLabel: "MP4" })
-  }
-  if (variants.length === 0) throw Error("El payload de Voe no trajo ni source ni fallback[0].file")
-
-  return variants
 }
 
 /**
@@ -754,7 +756,7 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
 
     console.log(`[AnimeAV1] searchTerm="${searchTerm}" year=${seasonYear ?? 'ninguno'}`)
     const candidates = await searchAnimeAV1(searchTerm, seasonYear)
-    const match = pickBestMatch(candidates, searchTerm, seasonNum)
+    const match = pickBestMatch(candidates, searchTerm, seasonNum, type)
     console.log(`[AnimeAV1] Match elegido: "${match.title}" (${match.slug})`)
 
     const epNumber = type === "movie" ? 1 : (episode !== undefined ? Number(episode) : 1)
