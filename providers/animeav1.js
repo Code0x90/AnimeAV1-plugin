@@ -820,7 +820,7 @@ function getTMDBInfo(_x, _x2) {
 }
 function _getTMDBInfo() {
   _getTMDBInfo = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee3(tmdbId, type) {
-    var path, url, data, title, dateStr, year, originCountries, genreIds, isAnimation;
+    var path, url, data, title, originalTitle, dateStr, year, originCountries, genreIds, isAnimation;
     return _regenerator().w(function (_context3) {
       while (1) switch (_context3.n) {
         case 0:
@@ -843,6 +843,7 @@ function _getTMDBInfo() {
           return _context3.a(2, null);
         case 2:
           title = data.title || data.name || data.original_title || data.original_name;
+          originalTitle = data.original_title || data.original_name || title;
           dateStr = data.release_date || data.first_air_date;
           year = dateStr ? new Date(dateStr).getFullYear() : void 0;
           if (title) {
@@ -860,6 +861,7 @@ function _getTMDBInfo() {
           isAnimation = genreIds.includes(16);
           return _context3.a(2, {
             title,
+            originalTitle,
             year,
             originCountries,
             isAnimation
@@ -921,6 +923,35 @@ var ANILIST_SEASON_SUFFIX_RE = /\s+(?:\d+(?:st|nd|rd|th)\s+season|season\s+\d+(?
 function anilistBaseTitle(romaji) {
   return romaji.replace(ANILIST_SEASON_SUFFIX_RE, "").trim();
 }
+function fetchWithTimeout110(url, options, timeoutMs) {
+  var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  var timer;
+  var request = fetch(url, Object.assign({}, options || {}, controller ? { signal: controller.signal } : {}));
+  var timeout = new Promise(function (_, reject) {
+    timer = setTimeout(function () {
+      if (controller) controller.abort();
+      var error = new Error(`Timeout después de ${timeoutMs}ms`);
+      error.name = "AbortError";
+      reject(error);
+    }, timeoutMs);
+  });
+  return Promise.race([request, timeout]).then(function (value) {
+    clearTimeout(timer);
+    return value;
+  }, function (error) {
+    clearTimeout(timer);
+    throw error;
+  });
+}
+function getNamedSeasonNumber110(title) {
+  var value = normalizeTitle110(title), m;
+  m = value.match(/\bseason\s*(\d+)\b/); if (m) return Number(m[1]);
+  m = value.match(/\b(\d+)(?:st|nd|rd|th)\s+season\b/); if (m) return Number(m[1]);
+  m = value.match(/\b(?:s|t)\s*(\d+)\b/); if (m) return Number(m[1]);
+  m = value.match(/\b(\d+)(?:st|nd|rd|th)?\s+temporada\b/); if (m) return Number(m[1]);
+  return undefined;
+}
+
 function getAniListInfo(_x5, _x6) {
   return _getAniListInfo.apply(this, arguments);
 }
@@ -936,13 +967,14 @@ function _getAniListInfo() {
         media(search: $search, type: ANIME, sort: SEARCH_MATCH) {
           id
           title { romaji english }
+          season
           seasonYear
           startDate { year month day }
         }
       }
     }`;
           _context5.n = 1;
-          return fetch("https://graphql.anilist.co", {
+          return fetchWithTimeout110("https://graphql.anilist.co", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -1004,7 +1036,19 @@ function _getAniListInfo() {
           console.log(`[AniList] "${baseRomaji}" \u2014 ${withDate.length} temporada(s) encontradas: ${withDate.map(function (w) {
             return `${w.title}(${w.year})`;
           }).join(", ")}`);
-          target = withDate[seasonNum - 1];
+          var explicitSeason = sameSeries.map(function (m) {
+            var _a3, _b3;
+            var romaji = ((_a3 = m.title) == null ? void 0 : _a3.romaji) || "";
+            return { title: romaji, year: (_b3 = m.seasonYear) != null ? _b3 : m.startDate == null ? void 0 : m.startDate.year, explicit: getNamedSeasonNumber110(romaji), part: /\bpart\s*\d+\b/i.test(romaji) };
+          }).filter(function (m) { return m.title && m.year; });
+          target = explicitSeason.find(function (m) { return m.explicit === seasonNum; });
+          if (!target && seasonNum === 1) target = explicitSeason.find(function (m) { return m.explicit === undefined && !m.part; });
+          if (!target && seasonNum === 1) target = withDate.find(function (m) { return !/\bpart\s*\d+\b/i.test(m.title || ""); });
+          if (!target && seasonNum === 1) target = withDate[0];
+          if (!target && seasonNum > 1) {
+            console.warn(`[AniList] No se identificó una Season ${seasonNum} explícita; no se usará Part 2 como sustituto`);
+            return _context5.a(2, void 0);
+          }
           if (target) {
             _context5.n = 6;
             break;
@@ -1646,16 +1690,16 @@ exports.getStreams = function (tmdbId, type, season, episode) {
     if (!looksLikeAnime(info)) return [];
     var seasonYear = type === "movie" ? info.year : tmdbSeasonYear;
     var searchTerm = seasonNum !== 1 ? `${info.title} ${seasonNum}` : info.title;
-    var initialAniListPromise = seasonYear === undefined && type !== "movie" ? getAniListInfo(info.title, seasonNum) : Promise.resolve(undefined);
+    var initialAniListPromise = seasonYear === undefined && type !== "movie" ? getAniListInfo(info.title, seasonNum).catch(function (e) { console.warn(`[AniList] inicial omitido (${e.name === "AbortError" ? "timeout" : e.message})`); return undefined; }) : Promise.resolve(undefined);
     return initialAniListPromise.then(function (aniListInfo) {
-      if (aniListInfo) { seasonYear = aniListInfo.year; searchTerm = aniListInfo.romajiTitle; }
+      if (aniListInfo) { seasonYear = aniListInfo.year || seasonYear; searchTerm = aniListInfo.romajiTitle || searchTerm; }
       console.log(`[AnimeAV1] searchTerm="${searchTerm}" year=${seasonYear != null ? seasonYear : "ninguno"}`);
       return searchAnimeAV1(searchTerm, seasonYear).then(function (candidates) {
         var matchInfo = pickBestMatch110(candidates, searchTerm, seasonNum);
         var retry = !matchInfo || !matchInfo.accepted;
-        var retryPromise = retry && type !== "movie" ? getAniListInfo(info.title, seasonNum) : Promise.resolve(undefined);
+        var retryPromise = retry && type !== "movie" ? getAniListInfo(info.title, seasonNum).catch(function (e) { console.warn(`[AniList] omitido (${e.name === "AbortError" ? "timeout" : e.message}); continuando con matching local`); return undefined; }) : Promise.resolve(undefined);
         return retryPromise.then(function (retryInfo) {
-          if (retryInfo && (retryInfo.romajiTitle !== searchTerm || retryInfo.year !== seasonYear)) {
+          if (retryInfo && retryInfo.romajiTitle && (retryInfo.romajiTitle !== searchTerm || retryInfo.year !== seasonYear)) {
             var retryTerm = retryInfo.romajiTitle, retryYear = retryInfo.year || seasonYear;
             return searchAnimeAV1(retryTerm, retryYear).then(function (retryCandidates) {
               var retryMatch = pickBestMatch110(retryCandidates, retryTerm, seasonNum);
@@ -1665,6 +1709,17 @@ exports.getStreams = function (tmdbId, type, season, episode) {
           }
           return { matchInfo: matchInfo };
         });
+      }).then(function (state) {
+        var localFallback = !state.matchInfo || !state.matchInfo.accepted;
+        if (localFallback && info.originalTitle && normalizeTitle110(info.originalTitle) !== normalizeTitle110(searchTerm)) {
+          console.log(`[AnimeAV1] Probando título original de TMDB: "${info.originalTitle}"`);
+          return searchAnimeAV1(info.originalTitle, seasonYear).then(function (localCandidates) {
+            var localMatch = pickBestMatch110(localCandidates, info.originalTitle, seasonNum);
+            if (localMatch && (localMatch.accepted || localMatch.score > ((state.matchInfo && state.matchInfo.score) != null ? state.matchInfo.score : -Infinity))) state.matchInfo = localMatch;
+            return state;
+          }).catch(function (e) { console.warn(`[AnimeAV1] Fallback con título original falló: ${e.message}`); return state; });
+        }
+        return state;
       }).then(function (state) {
         if (!state.matchInfo || !state.matchInfo.accepted) {
           console.warn(`[AnimeAV1] No hay una coincidencia suficientemente segura para "${searchTerm}"; no se usará el primer resultado`);
@@ -1693,7 +1748,8 @@ exports.getStreams = function (tmdbId, type, season, episode) {
             return source.extract(server.url).then(function (resolved) {
               var variants = Array.isArray(resolved) ? resolved : [resolved];
               return variants.map(function (variant) {
-                return { name: "AnimeAV1", title: "", url: variant.url, quality: `📺 ${source.label}\n1080p | WEB-DL | Anime\n${getLangLabel(server.dub)}`, headers: variant.headers, type: "hls" };
+                var quality = sourceKey === "Voe" ? "720p" : "1080p";
+                return { name: "AnimeAV1", title: "", url: variant.url, quality: `📺 ${source.label}\n${quality} | WEB-DL | Anime\n${getLangLabel(server.dub)}`, headers: variant.headers, type: "hls" };
               });
             }).catch(function (e) { console.warn(`[${source.label}] Falló resolviendo un servidor: ${e.message}`); return null; });
           })).then(function (results) {
