@@ -1,6 +1,6 @@
 // providers/animeav1.js
 // Provider Nuvio para AnimeAV1 (https://animeav1.com)
-// Único source: MP4Upload (sin HLS/zilla-networks — bloqueado por Cloudflare a nivel de segmentos)
+// Sources activos: HLS de Zilla y HLS de Voe.
 //
 // Contrato Nuvio: exports.getStreams(tmdbId, type, season, episode) -> Promise<Array<Stream>>
 // Stream: { name, title, url, quality, headers? }
@@ -15,9 +15,7 @@ const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 // un source en false ni siquiera se prueba/extrae para ese episodio.
 const ENABLED_SOURCES = {
   HLS: true,
-  MP4Upload: false,
   Voe: true,
-  // UPNShare: false, // ver nota junto a su extractor: descifrado AES removido, habría que restaurarlo antes de activar
 }
 
 // Servidores soportados: nombre tal como aparece en el HTML/__data.json de
@@ -114,30 +112,20 @@ async function getSeasonYear(tmdbId, seasonNum) {
 }
 
 /**
- * Fallback de año vía AniList (GraphQL), usado solo cuando TMDB no tiene el
- * año de la temporada (común en animes con temporadas "artificiales" en TMDB).
- * Reemplaza a Jikan: Jikan requiere adivinar el formato exacto del sufijo de
- * temporada en el título de búsqueda ("2nd Season" vs "Season 2", etc.), lo
- * cual varía por anime y causaba fallos (ej. Re:Zero). AniList devuelve
- * `seasonYear` como campo numérico estructurado, sin depender de parsear texto.
+ * Fallback de año/título vía AniList (GraphQL), usado cuando TMDB no tiene el
+ * año de la temporada o cuando el matching inicial no alcanza el umbral.
+ * AniList evita depender de adivinar el formato exacto del sufijo de temporada.
+ * El catálogo puede usar "2nd Season", "Season 2", etc., según el anime.
+ * AniList devuelve `seasonYear` y el título romaji estructurados.
  *
- * Además de resolver el año, devuelve el título ROMAJI real de esa temporada
- * (ej. "Re:Zero kara Hajimeru Isekai Seikatsu 2nd Season"). Es importante
- * usarlo para la búsqueda en AnimeAV1: el catálogo indexa solo por título
- * romaji japonés, nunca por el título en inglés que da TMDB — confirmado con
- * un caso real (Re:Zero) donde buscar con el título en inglés de TMDB no
- * encontraba el anime en absoluto (ni con año aplicado), y terminaba
- * eligiendo un resultado no relacionado por coincidencia parcial de palabras.
+ * Además de resolver el año, devuelve el título ROMAJI real de la temporada.
+ * Se usa como segunda oportunidad cuando el resultado de AnimeAV1 es ambiguo.
  *
  * Estrategia:
- *  1. Buscar por el título base (en inglés, el que da TMDB).
- *  2. Tomar el primer resultado como ancla y extraer su título romaji base
- *     (sin sufijos de temporada) para filtrar solo entradas de la misma serie
- *     — AniList devuelve también spin-offs/specials con nombres relacionados
- *     pero distintos (ej. "Kyuukei Jikan (Break Time)" para Re:Zero).
- *  3. Ordenar los candidatos filtrados cronológicamente por fecha de estreno
- *     y devolver el año + título romaji de la posición [seasonNum - 1] —
- *     asume que las temporadas están numeradas en orden de emisión, igual que TMDB.
+ *  1. Buscar por el título base de TMDB.
+ *  2. Tomar el primer resultado como ancla y extraer su título romaji base.
+ *  3. Ordenar los candidatos de la misma serie por fecha y seleccionar la
+ *     temporada solicitada.
  *
  * @returns {Promise<{year: number, romajiTitle: string}|undefined>}
  */
@@ -303,38 +291,136 @@ async function searchAnimeAV1(query, year) {
   throw Error("No search results!")
 }
 
-// Patrones que indican temporada 2+ en el título del catálogo — se usan para
-// descartar candidatos de temporadas superiores cuando buscamos la T1.
+// Patrones que indican temporada 2+ en el título del catálogo.
 const HIGHER_SEASON_PATTERNS = [
   /\b2nd\s+season\b/i, /\b3rd\s+season\b/i, /\b4th\s+season\b/i,
   /\bseason\s+[2-9]\b/i, /\bpart\s+[2-9]\b/i,
-  /\b2\w*\s+temporada\b/i,
-  /\s+[2-9]$/,
+  /\b[2-9]\s*(?:st|nd|rd|th)?\s+temporada\b/i,
 ]
 
+const STOP_WORDS = new Set([
+  'the', 'a', 'an', 'of', 'and', 'to', 'in', 'on', 'for', 'no', 'na',
+  'la', 'el', 'los', 'las', 'de', 'del', 'y', 'en', 'con', 'part',
+  'season', 'temporada', 'cour', 'arc'
+])
+
+function normalizeTitle(s) {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[’'`´]/g, '')
+    .replace(/[-–—_:.,!?()[\]{}]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function titleTokens(s) {
+  return normalizeTitle(s)
+    .split(' ')
+    .filter((token) => token && !STOP_WORDS.has(token))
+}
+
+function getExplicitSeason(title) {
+  const value = normalizeTitle(title)
+  let m = value.match(/\bseason\s*(\d+)\b/)
+  if (m) return Number(m[1])
+  m = value.match(/\b(\d+)(?:st|nd|rd|th)\s+season\b/)
+  if (m) return Number(m[1])
+  m = value.match(/\b(?:s|t)\s*(\d+)\b/)
+  if (m) return Number(m[1])
+  m = value.match(/\bpart\s*(\d+)\b/)
+  if (m) return Number(m[1])
+  m = value.match(/\b(\d+)(?:st|nd|rd|th)?\s+temporada\b/)
+  if (m) return Number(m[1])
+  return undefined
+}
+
+function wordSimilarity(target, candidate) {
+  const targetTokens = [...new Set(titleTokens(target))]
+  const candidateTokens = new Set(titleTokens(candidate))
+  if (!targetTokens.length) return 0
+  let matched = 0
+  for (const token of targetTokens) {
+    if (candidateTokens.has(token)) matched++
+  }
+  return matched / targetTokens.length
+}
+
 /**
- * Elige el mejor candidato de una lista de resultados de búsqueda.
- * @param {Array} candidates
- * @param {string} searchTerm - término de búsqueda ya con temporada incluida si aplica (ej: "Frieren 3")
- * @param {number} seasonNum
+ * Puntúa un candidato usando coincidencia por palabras + temporada.
+ * El año se utiliza en la consulta a AnimeAV1 (minYear/maxYear), por lo que
+ * no se inventa una puntuación de año que el resultado del catálogo no expone.
+ *
+ * Devuelve { candidate, score, similarity, candidateSeason }.
+ */
+function scoreCandidate(candidate, searchTerm, seasonNum) {
+  const candidateTitle = candidate?.title || ''
+  const target = normalizeTitle(searchTerm)
+  const normalizedCandidate = normalizeTitle(candidateTitle)
+  const similarity = wordSimilarity(searchTerm, candidateTitle)
+  const explicitSeason = getExplicitSeason(candidateTitle)
+
+  let score = similarity * 60
+
+  // Coincidencia exacta: máxima confianza de título.
+  if (normalizedCandidate === target) score += 30
+
+  if (seasonNum > 1) {
+    if (explicitSeason === seasonNum) score += 45
+    else if (explicitSeason !== undefined) score -= 45
+    // Si el título de búsqueda contiene el número de temporada, una coincidencia
+    // del token numérico también aporta señal aunque el nombre del sitio no use
+    // "Season N" literalmente.
+    const targetHasSeasonNumber = new RegExp(`\\b${seasonNum}\\b`).test(target)
+    if (targetHasSeasonNumber && new RegExp(`\\b${seasonNum}\\b`).test(normalizedCandidate)) score += 15
+  } else if (explicitSeason !== undefined && explicitSeason > 1) {
+    score -= 55
+  }
+
+  return { candidate, score, similarity, candidateSeason: explicitSeason }
+}
+
+/**
+ * Elige el mejor candidato sin caer en `pool[0]`.
+ * Se exige un umbral mínimo y se devuelve información de confianza para que
+ * getStreams pueda probar AniList cuando la búsqueda sea ambigua.
  */
 function pickBestMatch(candidates, searchTerm, seasonNum) {
-  const norm = (s) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
+  if (!Array.isArray(candidates) || candidates.length === 0) return null
 
   let pool = candidates
   if (seasonNum === 1) {
-    // Para temporada 1, evitamos que un resultado de T2/T3 gane el match
-    // (por ejemplo si el catálogo no tiene la T1 pero sí la T2 con título similar).
-    const filtered = candidates.filter((c) => !HIGHER_SEASON_PATTERNS.some((p) => p.test(c.title)))
+    const filtered = candidates.filter((c) => !HIGHER_SEASON_PATTERNS.some((p) => p.test(c.title || '')))
     if (filtered.length > 0) pool = filtered
   }
 
-  const target = norm(searchTerm)
-  let best = pool.find((c) => norm(c.title) === target)
-  if (best) return best
-  best = pool.find((c) => norm(c.title).includes(target) || target.includes(norm(c.title)))
-  if (best) return best
-  return pool[0]
+  const scored = pool
+    .map((candidate) => scoreCandidate(candidate, searchTerm, seasonNum))
+    .sort((a, b) => b.score - a.score)
+
+  const best = scored[0]
+  const second = scored[1]
+  const gap = second ? best.score - second.score : best.score
+
+  // Para una coincidencia de temporada >1 exigimos una señal de temporada
+  // explícita o una coincidencia muy fuerte del título. Para T1 penalizamos
+  // fuertemente títulos que anuncian otra temporada.
+  const hasExpectedSeason = seasonNum === 1
+    ? best.candidateSeason === undefined || best.candidateSeason === 1
+    : best.candidateSeason === seasonNum
+  const threshold = seasonNum > 1 ? 65 : 50
+  const accepted = best.score >= threshold && (hasExpectedSeason || best.score >= 95)
+
+  console.log(`[AnimeAV1] Matching: ${scored.slice(0, 5).map((x) => `"${x.candidate.title}"=${x.score.toFixed(1)}`).join(' | ')}`)
+  console.log(`[AnimeAV1] Mejor match: "${best.candidate.title}" score=${best.score.toFixed(1)} gap=${gap.toFixed(1)} accepted=${accepted}`)
+
+  return {
+    ...best,
+    gap,
+    accepted,
+    candidates: scored
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -343,7 +429,7 @@ function pickBestMatch(candidates, searchTerm, seasonNum) {
 
 /**
  * Obtiene la lista de servidores (embeds SUB/DUB) de un episodio dado.
- * Solo nos interesa el servidor "MP4Upload".
+ * Solo interesan los servidores HLS de Zilla y Voe.
  */
 async function getEpisodeServers(slug, epNumber) {
   const ep = (epNumber !== undefined && epNumber !== null) ? Number(epNumber) : 1
@@ -386,7 +472,7 @@ async function getEpisodeServers(slug, epNumber) {
     // dataArray (formato "devalue"), así que embeds.SUB es un índice, no el
     // array en sí. Pero los OBJETOS dentro de ese array pueden venir de dos formas:
     //   a) también indexados: {server: <idx>, url: <idx>} -> hay que resolver cada campo
-    //   b) ya como valores literales: {server: "MP4Upload", url: "https://..."}
+    //   b) ya como valores literales: {server: "HLS" o "Voe", url: "https://..."}
     // Soportamos ambos casos sin asumir cuál aplica.
     function resolveField(value) {
       // Si es un índice numérico válido dentro de dataArray, lo resolvemos;
@@ -521,12 +607,9 @@ async function extractZillaHLS(playUrl) {
  *   ROT13 -> reemplazar 7 marcadores literales por "_" -> quitar "_"
  *   -> atob -> restar 3 al code de cada char -> invertir string -> atob
  *   -> JSON.parse
- * El JSON resultante trae DOS variantes reproducibles:
- *   - source           -> manifest HLS (.m3u8)
- *   - fallback[0].file -> MP4 directo
- * Se devuelven ambas (en vez de un solo objeto) para comparar cuál es más
- * confiable en producción; `direct_access_url` se ignora a propósito porque
- * el propio JSON marca `direct_access_allowed: false`.
+ * El JSON resultante trae `source`, que es el manifest HLS reproducible.
+ * `fallback`/MP4 y `direct_access_url` se ignoran deliberadamente: 1.1.0
+ * expone únicamente streams HLS, igual que el source HLS de Zilla.
  */
 const VOE_MARKERS = ['@$', '^^', '~@', '%?', '*~', '!!', '#&']
 
@@ -557,9 +640,7 @@ function decodeVoePayload(rawValue) {
   return JSON.parse(x)
 }
 
-// extractVoe devuelve un ARRAY (a diferencia de los demás extractores, que
-// devuelven un solo objeto), porque de un mismo embed salen dos variantes
-// reproducibles (HLS y MP4) que queremos comparar en producción.
+// extractVoe devuelve únicamente el manifest HLS reproducible de Voe.
 async function extractVoe(embedUrl) {
   // El fetch sigue la redirección HTTP normal, pero VOE también puede
   // devolver una página intermedia que redirige mediante JavaScript.
@@ -628,61 +709,20 @@ async function extractVoe(embedUrl) {
     "Sec-Fetch-Dest": "empty",
     "User-Agent": UA
   }
-  const mp4Headers = { "User-Agent": UA }
+  if (!decoded.source) throw Error("El payload de Voe no trajo source HLS")
 
-  const variants = []
-  if (decoded.source) {
-    console.log(`[Voe] HLS (source) extraído: ${decoded.source}`)
-    variants.push({ url: decoded.source, headers: hlsHeaders, type: "hls", variantLabel: "HLS" })
-  }
-  const fallbackFile = decoded.fallback?.[0]?.file
-  if (fallbackFile) {
-    console.log(`[Voe] MP4 (fallback) extraído: ${fallbackFile}`)
-    variants.push({ url: fallbackFile, headers: mp4Headers, type: "mp4", variantLabel: "MP4" })
-  }
-  if (variants.length === 0) throw Error("El payload de Voe no trajo ni source ni fallback[0].file")
-
-  return variants
-}
-
-/**
- * MP4Upload (https://www.mp4upload.com/embed-xxxx.html)
- * Extrae la URL directa del .mp4 parseando el script inline del reproductor.
- */
-async function extractMP4Upload(embedUrl) {
-  const origin = (() => { try { return new URL(embedUrl).origin } catch (_) { return "https://www.mp4upload.com" } })()
-  const resp = await fetch(embedUrl, {
-    headers: {
-      "Referer": origin,
-      "Origin": origin,
-      "User-Agent": UA
-    }
-  })
-  if (!resp.ok) throw Error(`HTTP error! Status: ${resp.status}`)
-  const data = await resp.text()
-  const match = /<script(?:.|\n)+?src:(?:.|\n)*?"(.+?\.mp4)"/g.exec(data)
-  if (!match || !match[1]) throw Error("No se encontró URL .mp4 en el embed de MP4Upload")
-  console.log(`[MP4Upload] URL extraída: ${match[1]}`)
+  console.log(`[Voe] HLS extraído: ${decoded.source}`)
   return {
-    url: match[1],
-    headers: { Referer: "https://www.mp4upload.com", Origin: "https://www.mp4upload.com", "User-Agent": UA }
+    url: decoded.source,
+    headers: hlsHeaders,
+    type: "hls"
   }
 }
 
-// Registro de sources soportados: nombre (tal como aparece en AnimeAV1) -> { label, extract }
-// Para sumar un nuevo source: escribir su función extract(url) -> {url, headers}
-// (o un array de esos objetos, como hace Voe), agregarlo al objeto
-// ALL_SOURCES de abajo, y su entrada en ENABLED_SOURCES (arriba, al inicio
-// del archivo) si quieres poder apagarlo/encenderlo.
-// UPNShare removido por completo (junto con el descifrado AES/crypto-js): el
-// endpoint devolvía un payload que fallaba al parsear tras descifrar en
-// varios casos. Si se retoma en el futuro, revisar el historial de versiones
-// anteriores del código para recuperar la implementación con AES-128/CBC.
+// Registro de sources activos: únicamente HLS directo de Zilla y HLS de Voe.
 const ALL_SOURCES = {
   HLS: { label: "HLS", extract: extractZillaHLS },
-  MP4Upload: { label: "MP4Upload", extract: extractMP4Upload },
-  Voe: { label: "Voe", extract: extractVoe }
-  // UPNShare: { label: "UPNShare", extract: extractUPNShare },
+  Voe: { label: "Voe HLS", extract: extractVoe }
 }
 
 for (const [key, source] of Object.entries(ALL_SOURCES)) {
@@ -728,34 +768,56 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
       return []
     }
 
-    // Año de la temporada específica: TMDB primero, AniList como respaldo
-    // (solo si TMDB falla/no tiene el dato — TMDB es la fuente principal).
-    // Es lo que nos permite distinguir "Frieren T1 (2023)" de "Frieren T3 (2026)"
-    // cuando ambas entradas del catálogo tienen títulos casi idénticos.
-    let seasonYear
+    // Matching 1.1.0: título por palabras + temporada + año de búsqueda.
+    // TMDB aporta el año de la temporada; si el resultado es ambiguo, AniList
+    // aporta el título romaji y vuelve a ejecutarse el matching.
+    let seasonYear = type === "movie" ? info.year : tmdbSeasonYear
     let searchTerm = seasonNum !== 1 ? `${info.title} ${seasonNum}` : info.title
 
-    if (type === "movie") {
-      seasonYear = info.year
-    } else {
-      seasonYear = tmdbSeasonYear
-      if (seasonYear === undefined) {
-        console.warn(`[AnimeAV1] TMDB sin año para temporada ${seasonNum}, probando AniList`)
-        const aniListInfo = await getAniListInfo(info.title, seasonNum)
-        if (aniListInfo) {
-          seasonYear = aniListInfo.year
-          // Clave: AnimeAV1 indexa por título ROMAJI japonés, nunca por el
-          // título en inglés que da TMDB — usar el romaji real de AniList en
-          // vez de "{título en inglés} {N}" (que no matchea nada en el sitio).
-          searchTerm = aniListInfo.romajiTitle
-        }
+    if (seasonYear === undefined && type !== "movie") {
+      console.warn(`[AnimeAV1] TMDB sin año para temporada ${seasonNum}, probando AniList`)
+      const aniListInfo = await getAniListInfo(info.title, seasonNum)
+      if (aniListInfo) {
+        seasonYear = aniListInfo.year
+        searchTerm = aniListInfo.romajiTitle
       }
     }
 
     console.log(`[AnimeAV1] searchTerm="${searchTerm}" year=${seasonYear ?? 'ninguno'}`)
-    const candidates = await searchAnimeAV1(searchTerm, seasonYear)
-    const match = pickBestMatch(candidates, searchTerm, seasonNum)
-    console.log(`[AnimeAV1] Match elegido: "${match.title}" (${match.slug})`)
+    let candidates = await searchAnimeAV1(searchTerm, seasonYear)
+    let matchInfo = pickBestMatch(candidates, searchTerm, seasonNum)
+
+    // Si el primer intento no alcanza el umbral, usamos AniList como segunda
+    // estrategia aunque TMDB sí haya proporcionado un año. Esto evita volver
+    // silenciosamente al primer resultado cuando el título de TMDB y el
+    // catálogo romaji de AnimeAV1 no coinciden bien.
+    if (!matchInfo?.accepted && type !== "movie") {
+      console.warn(`[AnimeAV1] Matching ambiguo para "${searchTerm}"; probando título romaji de AniList`)
+      const aniListInfo = await getAniListInfo(info.title, seasonNum)
+      if (aniListInfo && (aniListInfo.romajiTitle !== searchTerm || aniListInfo.year !== seasonYear)) {
+        const retryYear = aniListInfo.year ?? seasonYear
+        const retryTerm = aniListInfo.romajiTitle
+        try {
+          candidates = await searchAnimeAV1(retryTerm, retryYear)
+          const retryMatch = pickBestMatch(candidates, retryTerm, seasonNum)
+          if (retryMatch?.accepted || !matchInfo?.accepted) {
+            matchInfo = retryMatch
+            seasonYear = retryYear
+            searchTerm = retryTerm
+          }
+        } catch (e) {
+          console.warn(`[AnimeAV1] Segunda búsqueda AniList falló: ${e.message}`)
+        }
+      }
+    }
+
+    if (!matchInfo?.accepted) {
+      console.warn(`[AnimeAV1] No hay una coincidencia suficientemente segura para "${searchTerm}"; no se usará el primer resultado`)
+      return []
+    }
+
+    const match = matchInfo.candidate
+    console.log(`[AnimeAV1] Match elegido: "${match.title}" (${match.slug}) score=${matchInfo.score.toFixed(1)}`)
 
     const epNumber = type === "movie" ? 1 : (episode !== undefined ? Number(episode) : 1)
     let servers = await getEpisodeServers(match.slug, epNumber)
@@ -771,11 +833,8 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
       return []
     }
 
-    // Orden de salida: primero por source (según el orden en que se registraron
-    // en SOURCE_EXTRACTORS, ej. HLS antes que MP4Upload), y dentro de cada
-    // source, SUB (japonés) antes que DUB (latino). Así el usuario ve
-    // "HLS japonés, HLS latino, MP4Upload japonés, MP4Upload latino", no el
-    // orden arbitrario en que el sitio los devuelve.
+    // Orden de salida: primero HLS Zilla y luego Voe HLS; dentro de cada source,
+    // SUB (japonés) antes que DUB (latino).
     const sourceOrder = Object.keys(SOURCE_EXTRACTORS)
     servers = [...servers].sort((a, b) => {
       const aIdx = sourceOrder.findIndex((key) => a.name.includes(key))
@@ -791,13 +850,12 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
 
       try {
         const resolved = await source.extract(server.url)
-        // Algunos extractores (ej. Voe) devuelven un array de variantes
-        // reproducibles del mismo servidor (HLS y MP4); el resto devuelve
-        // un solo objeto. Se normaliza a array para procesar igual.
+        // Los extractores devuelven un objeto HLS reproducible; se normaliza a array
+        // para mantener el flujo común de procesamiento.
         const variantsList = Array.isArray(resolved) ? resolved : [resolved]
 
         return variantsList.map((variant) => {
-          const sourceLabel = variant.variantLabel ? `${source.label} (${variant.variantLabel})` : source.label
+          const sourceLabel = source.label
           const label = `📺 ${sourceLabel}\n1080p | WEB-DL | Anime\n${getLangLabel(server.dub)}`
           return {
             name: `AnimeAV1`,
@@ -815,8 +873,9 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
     }))
 
     const final = results.filter(Boolean).flat()
-    console.log(`[AnimeAV1] ✓ ${final.length} streams devueltos`)
-    return final
+    const unique = [...new Map(final.map((stream) => [`${stream.url}|${stream.quality}`, stream])).values()]
+    console.log(`[AnimeAV1] ✓ ${unique.length} streams devueltos`)
+    return unique
   } catch (e) {
     console.error(`[AnimeAV1] Error: ${e.message}`)
     return []
