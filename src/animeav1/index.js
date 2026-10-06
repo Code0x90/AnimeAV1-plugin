@@ -44,6 +44,7 @@ async function getTMDBInfo(tmdbId, type) {
   const dateStr = data.release_date || data.first_air_date
   const year = dateStr ? new Date(dateStr).getFullYear() : undefined
   if (!title) return null
+  const originalTitle = data.original_title || data.original_name || title
 
   // origin_country: en /tv/{id} viene directo como array de códigos ISO
   // (ej. ["JP"]); en /movie/{id} no existe ese campo, el equivalente es
@@ -59,7 +60,7 @@ async function getTMDBInfo(tmdbId, type) {
   const genreIds = (data.genres || []).map((g) => g.id)
   const isAnimation = genreIds.includes(16)
 
-  return { title, year, originCountries, isAnimation }
+  return { title, originalTitle, year, originCountries, isAnimation }
 }
 
 // Países de origen asociados a anime/animación asiática en TMDB. Se usa para
@@ -135,6 +136,25 @@ function anilistBaseTitle(romaji) {
   return romaji.replace(ANILIST_SEASON_SUFFIX_RE, '').trim()
 }
 
+async function fetchWithTimeout(url, options = {}, timeoutMs = 2500) {
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null
+  let timer
+  const request = fetch(url, { ...options, ...(controller ? { signal: controller.signal } : {}) })
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      if (controller) controller.abort()
+      const error = new Error(`Timeout después de ${timeoutMs}ms`)
+      error.name = 'AbortError'
+      reject(error)
+    }, timeoutMs)
+  })
+  try {
+    return await Promise.race([request, timeout])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 async function getAniListInfo(title, seasonNum) {
   try {
     const query = `query ($search: String) {
@@ -142,12 +162,13 @@ async function getAniListInfo(title, seasonNum) {
         media(search: $search, type: ANIME, sort: SEARCH_MATCH) {
           id
           title { romaji english }
+          season
           seasonYear
           startDate { year month day }
         }
       }
     }`
-    const resp = await fetch("https://graphql.anilist.co", {
+    const resp = await fetchWithTimeout("https://graphql.anilist.co", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
       body: JSON.stringify({ query, variables: { search: title } })
@@ -179,7 +200,34 @@ async function getAniListInfo(title, seasonNum) {
 
     console.log(`[AniList] "${baseRomaji}" — ${withDate.length} temporada(s) encontradas: ${withDate.map(w => `${w.title}(${w.year})`).join(', ')}`)
 
-    const target = withDate[seasonNum - 1]
+    // No tratamos "Part 2" como Season 2: en varias series es la segunda
+    // parte de la misma temporada (por ejemplo Mushoku Tensei S1 Part 2).
+    const explicitSeason = sameSeries
+      .map((m) => ({
+        title: m.title?.romaji,
+        year: m.seasonYear ?? m.startDate?.year,
+        season: m.season,
+        explicit: getNamedSeasonNumber(m.title?.romaji || ''),
+        part: /\bpart\s*\d+\b/i.test(m.title?.romaji || '')
+      }))
+      .filter((m) => m.title && m.year)
+
+    let target = explicitSeason.find((m) => m.explicit === seasonNum)
+    if (!target && seasonNum === 1) {
+      // Para S1 preferimos la entrada base; "Part 2" no cambia de temporada.
+      target = explicitSeason.find((m) => m.explicit === undefined && !m.part)
+    }
+    if (!target && seasonNum === 1) {
+      target = withDate.find((m) => !/\bpart\s*\d+\b/i.test(m.title || ''))
+    }
+    if (!target && seasonNum === 1) target = withDate[0]
+    // Para S2+ NO usamos el índice cronológico como sustituto silencioso:
+    // podría convertir "Part 2" de S1 en una falsa Season 2.
+    if (!target && seasonNum > 1) {
+      console.warn(`[AniList] No se identificó una Season ${seasonNum} explícita; no se usará Part 2 como sustituto`)
+      return undefined
+    }
+
     if (!target) {
       console.warn(`[AniList] No hay entrada para temporada ${seasonNum} (solo ${withDate.length} encontradas)`)
       return undefined
@@ -330,6 +378,22 @@ function getExplicitSeason(title) {
   m = value.match(/\b(?:s|t)\s*(\d+)\b/)
   if (m) return Number(m[1])
   m = value.match(/\bpart\s*(\d+)\b/)
+  if (m) return Number(m[1])
+  m = value.match(/\b(\d+)(?:st|nd|rd|th)?\s+temporada\b/)
+  if (m) return Number(m[1])
+  return undefined
+}
+
+// Igual que getExplicitSeason, pero deliberadamente ignora "Part N" porque
+// una parte 2 puede seguir perteneciendo a la misma temporada (ej. Mushoku
+// Tensei S1 Part 2). Solo estas formas se consideran una temporada real.
+function getNamedSeasonNumber(title) {
+  const value = normalizeTitle(title)
+  let m = value.match(/\bseason\s*(\d+)\b/)
+  if (m) return Number(m[1])
+  m = value.match(/\b(\d+)(?:st|nd|rd|th)\s+season\b/)
+  if (m) return Number(m[1])
+  m = value.match(/\b(?:s|t)\s*(\d+)\b/)
   if (m) return Number(m[1])
   m = value.match(/\b(\d+)(?:st|nd|rd|th)?\s+temporada\b/)
   if (m) return Number(m[1])
@@ -787,26 +851,49 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
     let candidates = await searchAnimeAV1(searchTerm, seasonYear)
     let matchInfo = pickBestMatch(candidates, searchTerm, seasonNum)
 
-    // Si el primer intento no alcanza el umbral, usamos AniList como segunda
-    // estrategia aunque TMDB sí haya proporcionado un año. Esto evita volver
-    // silenciosamente al primer resultado cuando el título de TMDB y el
-    // catálogo romaji de AnimeAV1 no coinciden bien.
+    // Si el primer intento no alcanza el umbral, AniList es solo una mejora
+    // opcional. Tiene timeout corto y cualquier error/caída deja intacto el
+    // matching local de TMDB; nunca es una dependencia del provider.
     if (!matchInfo?.accepted && type !== "movie") {
-      console.warn(`[AnimeAV1] Matching ambiguo para "${searchTerm}"; probando título romaji de AniList`)
-      const aniListInfo = await getAniListInfo(info.title, seasonNum)
-      if (aniListInfo && (aniListInfo.romajiTitle !== searchTerm || aniListInfo.year !== seasonYear)) {
-        const retryYear = aniListInfo.year ?? seasonYear
-        const retryTerm = aniListInfo.romajiTitle
+      console.warn(`[AnimeAV1] Matching ambiguo para "${searchTerm}"; probando AniList (opcional)`)
+      try {
+        const aniListInfo = await getAniListInfo(info.title, seasonNum)
+        if (aniListInfo) {
+          const retryYear = aniListInfo.year ?? seasonYear
+          const retryTerm = aniListInfo.romajiTitle
+          if (retryTerm && (retryTerm !== searchTerm || retryYear !== seasonYear)) {
+            try {
+              candidates = await searchAnimeAV1(retryTerm, retryYear)
+              const retryMatch = pickBestMatch(candidates, retryTerm, seasonNum)
+              if (retryMatch?.accepted || !matchInfo?.accepted) {
+                matchInfo = retryMatch
+                seasonYear = retryYear
+                searchTerm = retryTerm
+              }
+            } catch (e) {
+              console.warn(`[AnimeAV1] Segunda búsqueda AniList falló: ${e.message}`)
+            }
+          }
+        } else {
+          console.warn(`[AnimeAV1] AniList no disponible/sin resultado; continuando con matching local`)
+        }
+      } catch (e) {
+        console.warn(`[AnimeAV1] AniList omitido (${e.name === 'AbortError' ? 'timeout' : e.message}); continuando con matching local`)
+      }
+
+      // Fallback local: si TMDB tiene título original distinto al título
+      // localizado, probamos ese nombre sin depender de AniList.
+      if (!matchInfo?.accepted && info.originalTitle && normalizeTitle(info.originalTitle) !== normalizeTitle(searchTerm)) {
         try {
-          candidates = await searchAnimeAV1(retryTerm, retryYear)
-          const retryMatch = pickBestMatch(candidates, retryTerm, seasonNum)
-          if (retryMatch?.accepted || !matchInfo?.accepted) {
-            matchInfo = retryMatch
-            seasonYear = retryYear
-            searchTerm = retryTerm
+          console.log(`[AnimeAV1] Probando título original de TMDB: "${info.originalTitle}"`)
+          const localCandidates = await searchAnimeAV1(info.originalTitle, seasonYear)
+          const localMatch = pickBestMatch(localCandidates, info.originalTitle, seasonNum)
+          if (localMatch?.accepted || localMatch?.score > (matchInfo?.score ?? -Infinity)) {
+            matchInfo = localMatch
+            searchTerm = info.originalTitle
           }
         } catch (e) {
-          console.warn(`[AnimeAV1] Segunda búsqueda AniList falló: ${e.message}`)
+          console.warn(`[AnimeAV1] Fallback con título original falló: ${e.message}`)
         }
       }
     }
@@ -856,7 +943,8 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
 
         return variantsList.map((variant) => {
           const sourceLabel = source.label
-          const label = `📺 ${sourceLabel}\n1080p | WEB-DL | Anime\n${getLangLabel(server.dub)}`
+          const quality = sourceKey === "Voe" ? "720p" : "1080p"
+          const label = `📺 ${sourceLabel}\n${quality} | WEB-DL | Anime\n${getLangLabel(server.dub)}`
           return {
             name: `AnimeAV1`,
             title: "",     // vacío por pedido: toda la info visible va en quality
