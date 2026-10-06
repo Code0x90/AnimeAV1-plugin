@@ -1062,14 +1062,15 @@ function _searchAnimesBySpecificURL() {
           });
         case 1:
           html = _context6.v;
-          objBlockRegex = /\{\s*id:\s*"([^"]+)",\s*title:\s*"((?:[^"\\]|\\.)*)",\s*synopsis:\s*"((?:[^"\\]|\\.)*)",\s*categoryId:\s*\d+,\s*slug:\s*"([^"]+)"/g;
+          objBlockRegex = /\{\s*id:\s*"([^"]+)",\s*title:\s*"((?:[^"\\]|\\.)*)",\s*synopsis:\s*"((?:[^"\\]|\\.)*)",\s*categoryId:\s*(\d+),\s*slug:\s*"([^"]+)"/g;
           media = [];
           while ((m = objBlockRegex.exec(html)) !== null) {
             media.push({
               id: m[1],
               title: m[2].replace(/\\"/g, '"').replace(/\\n/g, "\n"),
               synopsis: m[3].replace(/\\"/g, '"').replace(/\\n/g, "\n"),
-              slug: m[4]
+              categoryId: Number(m[4]),
+              slug: m[5]
             });
           }
           return _context6.a(2, {
@@ -1177,7 +1178,7 @@ function _searchAnimeAV() {
   return _searchAnimeAV.apply(this, arguments);
 }
 var HIGHER_SEASON_PATTERNS = [/\b2nd\s+season\b/i, /\b3rd\s+season\b/i, /\b4th\s+season\b/i, /\bseason\s+[2-9]\b/i, /\bpart\s+[2-9]\b/i, /\b2\w*\s+temporada\b/i, /\s+[2-9]$/];
-function pickBestMatch(candidates, searchTerm, seasonNum) {
+function pickBestMatch(candidates, searchTerm, seasonNum, type) {
   var norm = function norm(s) {
     return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
   };
@@ -1189,6 +1190,12 @@ function pickBestMatch(candidates, searchTerm, seasonNum) {
       });
     });
     if (filtered.length > 0) pool = filtered;
+  }
+  if (type === "tv") {
+    var tvCandidates = pool.filter(function (c) {
+      return c.categoryId === 1;
+    });
+    if (tvCandidates.length > 0) pool = tvCandidates;
   }
   var target = norm(searchTerm);
   var best = pool.find(function (c) {
@@ -1576,21 +1583,15 @@ async function extractVoe(embedUrl) {
     "Sec-Fetch-Dest": "empty",
     "User-Agent": UA
   }
-  const mp4Headers = { "User-Agent": UA }
+  if (!decoded.source) throw Error("El payload de Voe no trajo source HLS")
 
-  const variants = []
-  if (decoded.source) {
-    console.log(`[Voe] HLS (source) extraído: ${decoded.source}`)
-    variants.push({ url: decoded.source, headers: hlsHeaders, type: "hls", variantLabel: "HLS" })
+  console.log(`[Voe] HLS (source) extraído: ${decoded.source}`)
+  return {
+    url: decoded.source,
+    headers: hlsHeaders,
+    type: "hls",
+    variantLabel: "HLS"
   }
-  const fallbackFile = decoded.fallback?.[0]?.file
-  if (fallbackFile) {
-    console.log(`[Voe] MP4 (fallback) extraído: ${fallbackFile}`)
-    variants.push({ url: fallbackFile, headers: mp4Headers, type: "mp4", variantLabel: "MP4" })
-  }
-  if (variants.length === 0) throw Error("El payload de Voe no trajo ni source ni fallback[0].file")
-
-  return variants
 }
 function extractMP4Upload(_x12) {
   return _extractMP4Upload.apply(this, arguments);
@@ -1740,7 +1741,7 @@ exports.getStreams = /*#__PURE__*/function () {
           return searchAnimeAV1(searchTerm, seasonYear);
         case 9:
           candidates = _context2.v;
-          match = pickBestMatch(candidates, searchTerm, seasonNum);
+          match = pickBestMatch(candidates, searchTerm, seasonNum, type);
           console.log(`[AnimeAV1] Match elegido: "${match.title}" (${match.slug})`);
           epNumber = type === "movie" ? 1 : episode !== void 0 ? Number(episode) : 1;
           _context2.n = 10;
