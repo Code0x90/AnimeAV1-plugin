@@ -87,7 +87,7 @@ function buildProvider(name, { minify }) {
 function main() {
   const rawArgs = process.argv.slice(2)
   const minify = rawArgs.includes('--minify')
-  const names = getProviderNames(rawArgs.filter((a) => a !== '--minify' && a !== '--transpile'))
+  const names = getProviderNames(rawArgs.filter((a) => a !== '--minify'))
 
   if (names.length === 0) {
     console.error('No hay providers para compilar en src/')
