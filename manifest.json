@@ -5,13 +5,19 @@
     {
       "id": "AnimeAV1",
       "name": "AnimeAV1",
-      "description": "Streams de anime (SUB/DUB) desde AnimeAV1 vía HLS-zilla y Voe HLS.",
+      "description": "Streams de anime (SUB/DUB) desde AnimeAV1 vía HLS, MP4Upload y Voe HLS.",
       "version": "1.0.9",
       "author": "-",
-      "supportedTypes": ["movie", "tv"],
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
       "filename": "providers/animeav1.js",
       "enabled": true,
-      "contentLanguage": ["ja", "es"]
+      "contentLanguage": [
+        "ja",
+        "es"
+      ]
     }
   ]
 }
