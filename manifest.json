@@ -1,17 +1,20 @@
 {
+  "id": "animeav1",
   "name": "AnimeAV1",
   "version": "1.0.9",
-  "scrapers": [
-    {
-      "id": "AnimeAV1",
-      "name": "AnimeAV1",
-      "description": "Streams de anime (SUB/DUB) desde AnimeAV1 vía HLS, MP4Upload y Voe.",
-      "version": "1.0.9",
-      "author": "-",
-      "supportedTypes": ["movie", "tv"],
-      "filename": "providers/animeav1.js",
-      "enabled": true,
-      "contentLanguage": ["ja", "es"]
-    }
-  ]
+  "description": "Provider de AnimeAV1 para Nuvio",
+  "logo": "https://animeav1.com/img/logo.svg",
+  "types": [
+    "movie",
+    "tv"
+  ],
+  "language": "es",
+  "country": "ES",
+  "resources": [
+    "stream"
+  ],
+  "behaviorHints": {
+    "configurable": false,
+    "adult": false
+  }
 }
