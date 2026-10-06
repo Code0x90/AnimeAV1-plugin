@@ -812,7 +812,7 @@ var TMDB_API_KEY = "56db0ec297530920213e1503706b81ff";
 var UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 var ENABLED_SOURCES = {
   HLS: true,
-  MP4Upload: true,
+  MP4Upload: false,
   Voe: true
   // UPNShare: false, // ver nota junto a su extractor: descifrado AES removido, habría que restaurarlo antes de activar
 };
@@ -937,7 +937,6 @@ function _getAniListInfo() {
       Page(page: 1, perPage: 15) {
         media(search: $search, type: ANIME, sort: SEARCH_MATCH) {
           id
-          idMal
           title { romaji english }
           seasonYear
           startDate { year month day }
@@ -999,8 +998,7 @@ function _getAniListInfo() {
             return {
               title: (_b2 = m.title) == null ? void 0 : _b2.romaji,
               year,
-              sortKey,
-              malId: m.idMal
+              sortKey
             };
           }).filter(Boolean).sort(function (a, b) {
             return a.sortKey.localeCompare(b.sortKey);
@@ -1016,11 +1014,10 @@ function _getAniListInfo() {
           console.warn(`[AniList] No hay entrada para temporada ${seasonNum} (solo ${withDate.length} encontradas)`);
           return _context5.a(2, void 0);
         case 6:
-          console.log(`[AniList] Temporada ${seasonNum} -> "${target.title}" year=${target.year} MAL=${target.malId != null ? target.malId : "desconocido"}`);
+          console.log(`[AniList] Temporada ${seasonNum} -> "${target.title}" year=${target.year}`);
           return _context5.a(2, {
             year: target.year,
-            romajiTitle: target.title,
-            malId: target.malId
+            romajiTitle: target.title
           });
         case 7:
           _context5.p = 7;
@@ -1065,15 +1062,14 @@ function _searchAnimesBySpecificURL() {
           });
         case 1:
           html = _context6.v;
-          objBlockRegex = /\{\s*id:\s*"([^"]+)",\s*title:\s*"((?:[^"\\]|\\.)*)",\s*synopsis:\s*"((?:[^"\\]|\\.)*)",\s*categoryId:\s*(\d+),\s*slug:\s*"([^"]+)"/g;
+          objBlockRegex = /\{\s*id:\s*"([^"]+)",\s*title:\s*"((?:[^"\\]|\\.)*)",\s*synopsis:\s*"((?:[^"\\]|\\.)*)",\s*categoryId:\s*\d+,\s*slug:\s*"([^"]+)"/g;
           media = [];
           while ((m = objBlockRegex.exec(html)) !== null) {
             media.push({
               id: m[1],
               title: m[2].replace(/\\"/g, '"').replace(/\\n/g, "\n"),
               synopsis: m[3].replace(/\\"/g, '"').replace(/\\n/g, "\n"),
-              categoryId: Number(m[4]),
-              slug: m[5]
+              slug: m[4]
             });
           }
           return _context6.a(2, {
@@ -1181,62 +1177,27 @@ function _searchAnimeAV() {
   return _searchAnimeAV.apply(this, arguments);
 }
 var HIGHER_SEASON_PATTERNS = [/\b2nd\s+season\b/i, /\b3rd\s+season\b/i, /\b4th\s+season\b/i, /\bseason\s+[2-9]\b/i, /\bpart\s+[2-9]\b/i, /\b2\w*\s+temporada\b/i, /\s+[2-9]$/];
-function getAnimeAV1MalId(candidate) {
-  if (!(candidate == null ? void 0 : candidate.slug)) return Promise.resolve(void 0);
-  return fetch(`${ANIMEAV1_BASE}/media/${candidate.slug}`, {
-    headers: {
-      "User-Agent": UA
-    }
-  }).then(function (resp) {
-    if (!resp.ok) throw Error(`HTTP error! Status: ${resp.status}`);
-    return resp.text();
-  }).then(function (html) {
-    var match = html.match(/\bmalId\s*:\s*(\d+)/);
-    return match ? Number(match[1]) : void 0;
-  }).catch(function (e) {
-    console.warn(`[AnimeAV1] No se pudo obtener MAL ID de "${candidate.title}": ${e.message}`);
-    return void 0;
-  });
-}
-function resolveBestMatch(candidates, searchTerm, seasonNum, type, expectedMalId) {
-  if (!expectedMalId) return Promise.resolve(pickBestMatch(candidates, searchTerm, seasonNum, expectedMalId, type, []));
-  return Promise.all(candidates.map(function (candidate) {
-    return getAnimeAV1MalId(candidate);
-  })).then(function (candidateMalIds) {
-    return pickBestMatch(candidates, searchTerm, seasonNum, expectedMalId, type, candidateMalIds);
-  });
-}
-
-function pickBestMatch(candidates, searchTerm, seasonNum, expectedMalId, type, candidateMalIds) {
+function pickBestMatch(candidates, searchTerm, seasonNum) {
   var norm = function norm(s) {
-    return String(s || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+    return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
   };
   var pool = candidates;
   if (seasonNum === 1) {
     var filtered = candidates.filter(function (c) {
-      return !HIGHER_SEASON_PATTERNS.some(function (p) { return p.test(c.title); });
+      return !HIGHER_SEASON_PATTERNS.some(function (p) {
+        return p.test(c.title);
+      });
     });
     if (filtered.length > 0) pool = filtered;
   }
-  if (expectedMalId && candidateMalIds && candidateMalIds.length === candidates.length) {
-    var malMatch = pool.find(function (candidate) {
-      var originalIndex = candidates.indexOf(candidate);
-      return candidateMalIds[originalIndex] === Number(expectedMalId);
-    });
-    if (malMatch) {
-      console.log(`[AnimeAV1] Match por MAL ID ${expectedMalId}: "${malMatch.title}"`);
-      return malMatch;
-    }
-    console.warn(`[AnimeAV1] No hubo coincidencia por MAL ID ${expectedMalId}; usando fallback de título/categoría`);
-  }
   var target = norm(searchTerm);
-  var best = pool.find(function (c) { return norm(c.title) === target; });
+  var best = pool.find(function (c) {
+    return norm(c.title) === target;
+  });
   if (best) return best;
-  if (type === "tv") {
-    var tvAnime = pool.filter(function (c) { return c.categoryId === 1; });
-    if (tvAnime.length > 0) pool = tvAnime;
-  }
-  best = pool.find(function (c) { return norm(c.title).includes(target) || target.includes(norm(c.title)); });
+  best = pool.find(function (c) {
+    return norm(c.title).includes(target) || target.includes(norm(c.title));
+  });
   if (best) return best;
   return pool[0];
 }
@@ -1555,100 +1516,81 @@ function decodeVoePayload(rawValue) {
   x = atob(x);
   return JSON.parse(x);
 }
-function extractVoe(_x11) {
-  return _extractVoe.apply(this, arguments);
-}
-function _extractVoe() {
-  _extractVoe = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee1(embedUrl) {
-    var _a, _b, resp, html, scriptMatch, jsonText, payloadArray, decoded, voeOrigin, hlsHeaders, variants, _t1, _t10;
-    return _regenerator().w(function (_context1) {
-      while (1) switch (_context1.p = _context1.n) {
-        case 0:
-          _context1.n = 1;
-          return fetch(embedUrl, {
-            headers: {
-              "User-Agent": UA
-            }
-          });
-        case 1:
-          resp = _context1.v;
-          if (resp.ok) {
-            _context1.n = 2;
-            break;
-          }
-          throw Error(`HTTP error! Status: ${resp.status}`);
-        case 2:
-          _context1.n = 3;
-          return resp.text();
-        case 3:
-          html = _context1.v;
-          scriptMatch = html.match(/<script type="application\/json"[^>]*>([\s\S]*?)<\/script>/);
-          if (scriptMatch) {
-            _context1.n = 4;
-            break;
-          }
-          throw Error('No se encontr\xF3 el <script type="application/json"> en el embed de Voe');
-        case 4:
-          jsonText = scriptMatch[1].trim().replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#34;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
-          _context1.p = 5;
-          payloadArray = JSON.parse(jsonText);
-          _context1.n = 7;
-          break;
-        case 6:
-          _context1.p = 6;
-          _t1 = _context1.v;
-          throw Error(`No se pudo parsear el array JSON del embed de Voe: ${_t1.message}`);
-        case 7:
-          if (!(!Array.isArray(payloadArray) || !payloadArray[0])) {
-            _context1.n = 8;
-            break;
-          }
-          throw Error("El embed de Voe no trajo el payload esperado");
-        case 8:
-          _context1.p = 8;
-          decoded = decodeVoePayload(payloadArray[0]);
-          _context1.n = 10;
-          break;
-        case 9:
-          _context1.p = 9;
-          _t10 = _context1.v;
-          throw Error(`No se pudo decodificar el payload de Voe: ${_t10.message}`);
-        case 10:
-          voeOrigin = function () {
-            try {
-              return new URL(embedUrl).origin;
-            } catch (_) {
-              return void 0;
-            }
-          }();
-          hlsHeaders = {
-            "Referer": voeOrigin ? `${voeOrigin}/` : embedUrl,
-            "Sec-Fetch-Site": "same-origin",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Dest": "empty",
-            "User-Agent": UA
-          };
-          variants = [];
-          if (decoded.source) {
-            console.log(`[Voe] HLS (source) extra\xEDdo: ${decoded.source}`);
-            variants.push({
-              url: decoded.source,
-              headers: hlsHeaders,
-              type: "hls",
-              variantLabel: "HLS"
-            });
-          }
-          if (!(variants.length === 0)) {
-            _context1.n = 11;
-            break;
-          }
-          throw Error("El payload de Voe no trajo source HLS");
-        case 11:
-          return _context1.a(2, variants);
-      }
-    }, _callee1, null, [[8, 9], [5, 6]]);
-  }));
-  return _extractVoe.apply(this, arguments);
+async function extractVoe(embedUrl) {
+  let resp = await fetch(embedUrl, {
+    headers: { "User-Agent": UA }
+  })
+  if (!resp.ok) throw Error(`HTTP error! Status: ${resp.status}`)
+
+  let html = await resp.text()
+
+  // fetch() no ejecuta JavaScript, así que seguimos manualmente la redirección
+  // window.location.href que usa VOE.
+  const jsRedirect = html.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/)
+  if (jsRedirect) {
+    const redirectUrl = jsRedirect[1]
+    console.log(`[Voe] Redirección JS detectada: ${redirectUrl}`)
+
+    resp = await fetch(redirectUrl, {
+      headers: { "User-Agent": UA }
+    })
+    if (!resp.ok) throw Error(`HTTP error! Status: ${resp.status}`)
+
+    html = await resp.text()
+  }
+
+  const scriptMatch = html.match(/<script type="application\/json"[^>]*>([\s\S]*?)<\/script>/)
+  if (!scriptMatch) throw Error('No se encontró el <script type="application/json"> en el embed de Voe')
+
+  const jsonText = scriptMatch[1]
+    .trim()
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#34;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+
+  let payloadArray
+  try {
+    payloadArray = JSON.parse(jsonText)
+  } catch (e) {
+    throw Error(`No se pudo parsear el array JSON del embed de Voe: ${e.message}`)
+  }
+  if (!Array.isArray(payloadArray) || !payloadArray[0]) {
+    throw Error("El embed de Voe no trajo el payload esperado")
+  }
+
+  let decoded
+  try {
+    decoded = decodeVoePayload(payloadArray[0])
+  } catch (e) {
+    throw Error(`No se pudo decodificar el payload de Voe: ${e.message}`)
+  }
+
+  const voeOrigin = (() => { try { return new URL(embedUrl).origin } catch (_) { return undefined } })()
+  const hlsHeaders = {
+    "Referer": voeOrigin ? `${voeOrigin}/` : embedUrl,
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Dest": "empty",
+    "User-Agent": UA
+  }
+  const mp4Headers = { "User-Agent": UA }
+
+  const variants = []
+  if (decoded.source) {
+    console.log(`[Voe] HLS (source) extraído: ${decoded.source}`)
+    variants.push({ url: decoded.source, headers: hlsHeaders, type: "hls", variantLabel: "HLS" })
+  }
+  const fallbackFile = decoded.fallback?.[0]?.file
+  if (fallbackFile) {
+    console.log(`[Voe] MP4 (fallback) extraído: ${fallbackFile}`)
+    variants.push({ url: fallbackFile, headers: mp4Headers, type: "mp4", variantLabel: "MP4" })
+  }
+  if (variants.length === 0) throw Error("El payload de Voe no trajo ni source ni fallback[0].file")
+
+  return variants
 }
 function extractMP4Upload(_x12) {
   return _extractMP4Upload.apply(this, arguments);
@@ -1770,20 +1712,27 @@ exports.getStreams = /*#__PURE__*/function () {
           return _context2.a(2, []);
         case 5:
           searchTerm = seasonNum !== 1 ? `${info.title} ${seasonNum}` : info.title;
-          _context2.n = 6;
-          return getAniListInfo(info.title, seasonNum);
+          if (!(type === "movie")) {
+            _context2.n = 6;
+            break;
+          }
+          seasonYear = info.year;
+          _context2.n = 8;
+          break;
         case 6:
-          aniListInfo = _context2.v;
-          if (type === "movie") {
-            seasonYear = info.year;
+          seasonYear = tmdbSeasonYear;
+          if (!(seasonYear === void 0)) {
             _context2.n = 8;
             break;
           }
-          seasonYear = tmdbSeasonYear;
-          if (seasonYear === void 0 && aniListInfo) {
-            console.warn(`[AnimeAV1] TMDB sin año para temporada ${seasonNum}, usando AniList`);
+          console.warn(`[AnimeAV1] TMDB sin a\xF1o para temporada ${seasonNum}, probando AniList`);
+          _context2.n = 7;
+          return getAniListInfo(info.title, seasonNum);
+        case 7:
+          aniListInfo = _context2.v;
+          if (aniListInfo) {
             seasonYear = aniListInfo.year;
-            if (aniListInfo.romajiTitle) searchTerm = aniListInfo.romajiTitle;
+            searchTerm = aniListInfo.romajiTitle;
           }
         case 8:
           console.log(`[AnimeAV1] searchTerm="${searchTerm}" year=${seasonYear != null ? seasonYear : "ninguno"}`);
@@ -1791,33 +1740,30 @@ exports.getStreams = /*#__PURE__*/function () {
           return searchAnimeAV1(searchTerm, seasonYear);
         case 9:
           candidates = _context2.v;
-          _context2.n = 10;
-          return resolveBestMatch(candidates, searchTerm, seasonNum, type, aniListInfo == null ? void 0 : aniListInfo.malId);
-        case 10:
-          match = _context2.v;
+          match = pickBestMatch(candidates, searchTerm, seasonNum);
           console.log(`[AnimeAV1] Match elegido: "${match.title}" (${match.slug})`);
           epNumber = type === "movie" ? 1 : episode !== void 0 ? Number(episode) : 1;
-          _context2.n = 11;
+          _context2.n = 10;
           return getEpisodeServers(match.slug, epNumber);
-        case 11:
+        case 10:
           servers = _context2.v;
           if (!(servers.length === 0 && type === "movie" && epNumber === 1)) {
-            _context2.n = 13;
+            _context2.n = 12;
             break;
           }
-          console.warn(`[AnimeAV1] Reintentando película con episodio 0`);
-          _context2.n = 12;
+          console.warn(`[AnimeAV1] Reintentando pel\xEDcula con episodio 0`);
+          _context2.n = 11;
           return getEpisodeServers(match.slug, 0);
-        case 12:
+        case 11:
           servers = _context2.v;
-        case 13:
+        case 12:
           if (!(servers.length === 0)) {
-            _context2.n = 14;
+            _context2.n = 13;
             break;
           }
           console.warn(`[AnimeAV1] Sin servidores soportados para "${match.title}"`);
           return _context2.a(2, []);
-        case 14:
+        case 13:
           sourceOrder = Object.keys(SOURCE_EXTRACTORS);
           servers = _toConsumableArray(servers).sort(function (a, b) {
             var aIdx = sourceOrder.findIndex(function (key) {
@@ -1829,7 +1775,7 @@ exports.getStreams = /*#__PURE__*/function () {
             if (aIdx !== bIdx) return aIdx - bIdx;
             return (a.dub ? 1 : 0) - (b.dub ? 1 : 0);
           });
-          _context2.n = 15;
+          _context2.n = 14;
           return Promise.all(servers.map(/*#__PURE__*/function () {
             var _ref2 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee(server) {
               var sourceKey, source, resolved, variantsList, _t;
@@ -1860,8 +1806,10 @@ ${getLangLabel(server.dub)}`;
                       return __spreadValues({
                         name: `AnimeAV1`,
                         title: "",
+                        // vacío por pedido: toda la info visible va en quality
                         url: variant.url,
                         quality: label,
+                        // label completo, ordenado, con \n reales entre líneas
                         headers: variant.headers
                       }, variant.type ? {
                         type: variant.type
@@ -1879,18 +1827,18 @@ ${getLangLabel(server.dub)}`;
               return _ref2.apply(this, arguments);
             };
           }()));
-        case 15:
+        case 14:
           results = _context2.v;
           final = results.filter(Boolean).flat();
           console.log(`[AnimeAV1] \u2713 ${final.length} streams devueltos`);
           return _context2.a(2, final);
-        case 18:
-          _context2.p = 18;
+        case 15:
+          _context2.p = 15;
           _t2 = _context2.v;
           console.error(`[AnimeAV1] Error: ${_t2.message}`);
           return _context2.a(2, []);
       }
-    }, _callee2, null, [[2, 18]]);
+    }, _callee2, null, [[2, 15]]);
   }));
   return function (_x13, _x14, _x15, _x16) {
     return _ref.apply(this, arguments);
