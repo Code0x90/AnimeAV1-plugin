@@ -254,40 +254,84 @@ async function searchAnimesBySpecificURL(url) {
  * Busca un anime en AnimeAV1 probando: query original, sanitizada, primeras 3 palabras.
  * @returns {Promise<Array>}
  */
-async function searchAnimeAV1(query, year) {
+const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000
+const animeAV1SearchCache = new Map()
+
+function isStrongSearchMatch(candidates, searchTerm, seasonNum) {
+  if (!Array.isArray(candidates) || !candidates.length) return false
+  let pool = candidates
+  if (seasonNum === 1) {
+    const filtered = candidates.filter((c) => !HIGHER_SEASON_PATTERNS.some((p) => p.test(c.title || '')))
+    if (filtered.length) pool = filtered
+  }
+  const scored = pool.map((candidate) => scoreCandidate(candidate, searchTerm, seasonNum)).sort((a, b) => b.score - a.score)
+  if (!scored.length) return false
+  const best = scored[0]
+  const hasExpectedSeason = seasonNum === 1
+    ? best.candidateSeason === undefined || best.candidateSeason === 1
+    : best.candidateSeason === seasonNum
+  const threshold = seasonNum > 1 ? 65 : 50
+  return best.score >= threshold && (hasExpectedSeason || best.score >= 95)
+}
+
+/**
+ * Busca un anime en AnimeAV1 usando variantes progresivas.
+ * Se detiene en cuanto una variante produce un match suficientemente seguro.
+ * Los candidatos se cachean brevemente; las URLs HLS/Voe no se cachean aquí.
+ */
+async function searchAnimeAV1(query, year, seasonNum = 1) {
   const runSearch = async (searchQuery) => {
+    const cacheKey = `${String(searchQuery).trim()}|${year ?? ''}`
+    const cached = animeAV1SearchCache.get(cacheKey)
+    if (cached && (Date.now() - cached.timestamp) < SEARCH_CACHE_TTL_MS) {
+      console.log(`[AnimeAV1] Cache búsqueda: "${searchQuery}"`)
+      return cached.media
+    }
+    if (cached) animeAV1SearchCache.delete(cacheKey)
+
     const searchURL = buildSearchURL(searchQuery, undefined, year)
     console.log(`[AnimeAV1] Buscando: ${searchURL}`)
     const data = await searchAnimesBySpecificURL(searchURL)
     if (!data?.media?.length) throw Error("No search results!")
+    animeAV1SearchCache.set(cacheKey, { timestamp: Date.now(), media: data.media })
     return data.media
   }
 
-  try {
-    return await runSearch(query)
-  } catch (e) {
-    if (e.message !== "No search results!") throw e
+  const tryVariant = async (variant) => {
+    try {
+      const media = await runSearch(variant)
+      if (isStrongSearchMatch(media, variant, seasonNum)) {
+        console.log(`[AnimeAV1] Match suficiente en esta búsqueda; se detienen variantes adicionales`)
+      }
+      return { media, strong: isStrongSearchMatch(media, variant, seasonNum) }
+    } catch (e) {
+      if (e.message !== "No search results!") throw e
+      return null
+    }
   }
+
+  const first = await tryVariant(query)
+  if (first?.strong) return first.media
 
   const sanitized = sanitizeQuery(query)
   if (sanitized && sanitized !== query) {
-    try {
-      return await runSearch(sanitized)
-    } catch (e) {
-      if (e.message !== "No search results!") throw e
+    const second = await tryVariant(sanitized)
+    if (second) {
+      if (second.strong) return second.media
+      // Si ya tenemos candidatos pero ninguno es seguro, no hacemos la búsqueda
+      // genérica de primeras palabras: aporta ruido y no sustituye AniList.
+      return second.media
     }
   }
 
   const base = sanitized || query
   const firstWords = base.split(' ').filter(Boolean).slice(0, 3).join(' ')
   if (firstWords && firstWords !== base) {
-    try {
-      return await runSearch(firstWords)
-    } catch (e) {
-      if (e.message !== "No search results!") throw e
-    }
+    const third = await tryVariant(firstWords)
+    if (third) return third.media
   }
 
+  if (first) return first.media
   throw Error("No search results!")
 }
 
@@ -813,7 +857,7 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
       return []
     }
 
-    // Matching 1.1.1: título por palabras + temporada + año de búsqueda.
+    // Matching 1.1.2: título por palabras + temporada + año de búsqueda.
     // TMDB aporta el año de la temporada; si el resultado es ambiguo, AniList
     // aporta el título romaji y vuelve a ejecutarse el matching.
     let seasonYear = type === "movie" ? info.year : tmdbSeasonYear
@@ -829,7 +873,7 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
     }
 
     console.log(`[AnimeAV1] searchTerm="${searchTerm}" year=${seasonYear ?? 'ninguno'}`)
-    let candidates = await searchAnimeAV1(searchTerm, seasonYear)
+    let candidates = await searchAnimeAV1(searchTerm, seasonYear, seasonNum)
     let matchInfo = pickBestMatch(candidates, searchTerm, seasonNum)
 
     // Si el primer intento no alcanza el umbral, usamos AniList como segunda
@@ -843,7 +887,7 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
         const retryYear = aniListInfo.year ?? seasonYear
         const retryTerm = aniListInfo.romajiTitle
         try {
-          candidates = await searchAnimeAV1(retryTerm, retryYear)
+          candidates = await searchAnimeAV1(retryTerm, retryYear, seasonNum)
           const retryMatch = pickBestMatch(candidates, retryTerm, seasonNum)
           if (retryMatch?.accepted || !matchInfo?.accepted) {
             matchInfo = retryMatch
