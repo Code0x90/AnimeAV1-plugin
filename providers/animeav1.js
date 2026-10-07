@@ -1574,7 +1574,7 @@ var getLangLabel = function getLangLabel(dub) {
   return dub ? "\u{1F1F2}\u{1F1FD} LATINO" : "\u{1F1EF}\u{1F1F5} JAPON\xC9S \xB7 \u{1F1F2}\u{1F1FD} Sub";
 };
 // ─────────────────────────────────────────────
-// AnimeAV1 1.1.0 — matching seguro y solo HLS
+// AnimeAV1 1.1.1 — matching seguro y solo HLS
 // Este bloque sobrescribe el entry point generado anteriormente para mantener
 // el provider Hermes-safe sin volver a depender del primer resultado.
 // ─────────────────────────────────────────────
@@ -1602,14 +1602,38 @@ function wordSimilarity110(target, candidate) {
   for (var i = 0; i < targetTokens.length; i++) if (candidateTokens.has(targetTokens[i])) matched++;
   return matched / targetTokens.length;
 }
+function getTitleAliases110(target) {
+  var raw = String(target || "").trim();
+  if (!raw) return [];
+  var aliases = [];
+  var add = function (value) {
+    var normalized = normalizeTitle110(value);
+    if (!normalized || normalized.length < 3) return;
+    if (aliases.indexOf(normalized) === -1) aliases.push(normalized);
+  };
+  var prefix = raw.match(/^\s*(.+?)\s*(?:~|:|\s[-–—]\s|\(|\[)/);
+  if (prefix) add(prefix[1]);
+  var quotedPrefix = raw.match(/^\s*(.+?)\s*(?:["“”]|«)/);
+  if (quotedPrefix) add(quotedPrefix[1]);
+  return aliases;
+}
+function getAliasExactMatch110(target, candidate) {
+  var normalizedCandidate = normalizeTitle110(candidate);
+  if (!normalizedCandidate) return undefined;
+  var aliases = getTitleAliases110(target);
+  for (var i = 0; i < aliases.length; i++) if (aliases[i] === normalizedCandidate) return aliases[i];
+  return undefined;
+}
 function scoreCandidate110(candidate, searchTerm, seasonNum) {
   var candidateTitle = candidate && candidate.title || "";
   var target = normalizeTitle110(searchTerm);
   var normalizedCandidate = normalizeTitle110(candidateTitle);
   var similarity = wordSimilarity110(searchTerm, candidateTitle);
+  var aliasExact = getAliasExactMatch110(searchTerm, candidateTitle);
   var explicitSeason = getExplicitSeason110(candidateTitle);
   var score = similarity * 60;
   if (normalizedCandidate === target) score += 30;
+  if (aliasExact) score = Math.max(score, 100);
   if (seasonNum > 1) {
     if (explicitSeason === seasonNum) score += 45;
     else if (explicitSeason !== undefined) score -= 45;
@@ -1617,7 +1641,7 @@ function scoreCandidate110(candidate, searchTerm, seasonNum) {
   } else if (explicitSeason !== undefined && explicitSeason > 1) {
     score -= 55;
   }
-  return { candidate: candidate, score: score, similarity: similarity, candidateSeason: explicitSeason };
+  return { candidate: candidate, score: score, similarity: similarity, candidateSeason: explicitSeason, aliasExact: aliasExact };
 }
 function pickBestMatch110(candidates, searchTerm, seasonNum) {
   if (!Array.isArray(candidates) || candidates.length === 0) return null;
@@ -1631,9 +1655,9 @@ function pickBestMatch110(candidates, searchTerm, seasonNum) {
   var hasExpectedSeason = seasonNum === 1 ? (best.candidateSeason === undefined || best.candidateSeason === 1) : best.candidateSeason === seasonNum;
   var threshold = seasonNum > 1 ? 65 : 50;
   var accepted = best.score >= threshold && (hasExpectedSeason || best.score >= 95);
-  console.log(`[AnimeAV1] Matching: ${scored.slice(0, 5).map(function (x) { return `"${x.candidate.title}"=${x.score.toFixed(1)}`; }).join(" | ")}`);
-  console.log(`[AnimeAV1] Mejor match: "${best.candidate.title}" score=${best.score.toFixed(1)} gap=${gap.toFixed(1)} accepted=${accepted}`);
-  return { candidate: best.candidate, score: best.score, similarity: best.similarity, candidateSeason: best.candidateSeason, gap: gap, accepted: accepted, candidates: scored };
+  console.log(`[AnimeAV1] Matching: ${scored.slice(0, 5).map(function (x) { return `"${x.candidate.title}"=${x.score.toFixed(1)}${x.aliasExact ? ' [alias]' : ''}`; }).join(" | ")}`);
+  console.log(`[AnimeAV1] Mejor match: "${best.candidate.title}" score=${best.score.toFixed(1)} gap=${gap.toFixed(1)}${best.aliasExact ? ' alias=true' : ''} accepted=${accepted}`);
+  return { candidate: best.candidate, score: best.score, similarity: best.similarity, candidateSeason: best.candidateSeason, gap: gap, accepted: accepted, aliasExact: best.aliasExact, candidates: scored };
 }
 
 exports.getStreams = function (tmdbId, type, season, episode) {
@@ -1693,7 +1717,7 @@ exports.getStreams = function (tmdbId, type, season, episode) {
             return source.extract(server.url).then(function (resolved) {
               var variants = Array.isArray(resolved) ? resolved : [resolved];
               return variants.map(function (variant) {
-                return { name: "AnimeAV1", title: "", url: variant.url, quality: `📺 ${source.label}\n1080p | WEB-DL | Anime\n${getLangLabel(server.dub)}`, headers: variant.headers, type: "hls" };
+                return { name: "AnimeAV1", title: "", url: variant.url, quality: `📺 ${sourceKey === "Voe" ? "Voe 720p" : source.label}\n${sourceKey === "Voe" ? "720p" : "1080p"} | WEB-DL | Anime\n${getLangLabel(server.dub)}`, headers: variant.headers, type: "hls" };
               });
             }).catch(function (e) { console.warn(`[${source.label}] Falló resolviendo un servidor: ${e.message}`); return null; });
           })).then(function (results) {
@@ -1705,5 +1729,5 @@ exports.getStreams = function (tmdbId, type, season, episode) {
         });
       });
     });
-  }).catch(function (e) { console.error(`[AnimeAV1] Error 1.1.0: ${e.message}`); return []; });
+  }).catch(function (e) { console.error(`[AnimeAV1] Error 1.1.1: ${e.message}`); return []; });
 };
