@@ -1574,7 +1574,7 @@ var getLangLabel = function getLangLabel(dub) {
   return dub ? "\u{1F1F2}\u{1F1FD} LATINO" : "\u{1F1EF}\u{1F1F5} JAPON\xC9S \xB7 \u{1F1F2}\u{1F1FD} Sub";
 };
 // ─────────────────────────────────────────────
-// AnimeAV1 1.1.1 — matching seguro y solo HLS
+// AnimeAV1 1.1.2 — matching seguro, búsquedas optimizadas y solo HLS
 // Este bloque sobrescribe el entry point generado anteriormente para mantener
 // el provider Hermes-safe sin volver a depender del primer resultado.
 // ─────────────────────────────────────────────
@@ -1660,9 +1660,76 @@ function pickBestMatch110(candidates, searchTerm, seasonNum) {
   return { candidate: best.candidate, score: best.score, similarity: best.similarity, candidateSeason: best.candidateSeason, gap: gap, accepted: accepted, aliasExact: best.aliasExact, candidates: scored };
 }
 
+// AnimeAV1 1.1.2 — búsquedas progresivas + cache de candidatos
+var SEARCH_CACHE_TTL_MS_112 = 5 * 60 * 1000;
+var animeAV1SearchCache112 = new Map();
+function isStrongSearchMatch112(candidates, searchTerm, seasonNum) {
+  if (!Array.isArray(candidates) || !candidates.length) return false;
+  var pool = candidates;
+  if (seasonNum === 1) {
+    var filtered = candidates.filter(function (c) { return ![/\b2nd\s+season\b/i, /\b3rd\s+season\b/i, /\b4th\s+season\b/i, /\bseason\s+[2-9]\b/i, /\bpart\s+[2-9]\b/i, /\b[2-9]\s*(?:st|nd|rd|th)?\s+temporada\b/i].some(function (p) { return p.test(c.title || ""); }); });
+    if (filtered.length) pool = filtered;
+  }
+  var scored = pool.map(function (candidate) { return scoreCandidate110(candidate, searchTerm, seasonNum); }).sort(function (a, b) { return b.score - a.score; });
+  if (!scored.length) return false;
+  var best = scored[0];
+  var hasExpectedSeason = seasonNum === 1 ? (best.candidateSeason === undefined || best.candidateSeason === 1) : best.candidateSeason === seasonNum;
+  var threshold = seasonNum > 1 ? 65 : 50;
+  return best.score >= threshold && (hasExpectedSeason || best.score >= 95);
+}
+searchAnimeAV1 = function (query, year, seasonNum) {
+  seasonNum = seasonNum || 1;
+  var runSearch = function (searchQuery) {
+    var cacheKey = `${String(searchQuery).trim()}|${year != null ? year : ""}`;
+    var cached = animeAV1SearchCache112.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < SEARCH_CACHE_TTL_MS_112) {
+      console.log(`[AnimeAV1] Cache búsqueda: "${searchQuery}"`);
+      return Promise.resolve(cached.media);
+    }
+    if (cached) animeAV1SearchCache112.delete(cacheKey);
+    var searchURL = buildSearchURL(searchQuery, void 0, year);
+    console.log(`[AnimeAV1] Buscando: ${searchURL}`);
+    return searchAnimesBySpecificURL(searchURL).then(function (data) {
+      if (!data || !data.media || !data.media.length) throw Error("No search results!");
+      animeAV1SearchCache112.set(cacheKey, { timestamp: Date.now(), media: data.media });
+      return data.media;
+    });
+  };
+  var tryVariant = function (variant) {
+    return runSearch(variant).then(function (media) {
+      var strong = isStrongSearchMatch112(media, variant, seasonNum);
+      if (strong) console.log(`[AnimeAV1] Match suficiente en esta búsqueda; se detienen variantes adicionales`);
+      return { media: media, strong: strong };
+    }).catch(function (e) {
+      if (e.message === "No search results!") return null;
+      throw e;
+    });
+  };
+  return tryVariant(query).then(function (first) {
+    if (first && first.strong) return first.media;
+    var sanitized = sanitizeQuery(query);
+    if (sanitized && sanitized !== query) {
+      return tryVariant(sanitized).then(function (second) {
+        if (second) {
+          if (second.strong) return second.media;
+          return second.media;
+        }
+        var base = sanitized || query;
+        var firstWords = base.split(" ").filter(Boolean).slice(0, 3).join(" ");
+        if (firstWords && firstWords !== base) return tryVariant(firstWords).then(function (third) { return third ? third.media : first ? first.media : Promise.reject(Error("No search results!")); });
+        return first ? first.media : Promise.reject(Error("No search results!"));
+      });
+    }
+    var base = sanitized || query;
+    var firstWords = base.split(" ").filter(Boolean).slice(0, 3).join(" ");
+    if (firstWords && firstWords !== base) return tryVariant(firstWords).then(function (third) { return third ? third.media : first ? first.media : Promise.reject(Error("No search results!")); });
+    return first ? first.media : Promise.reject(Error("No search results!"));
+  });
+};
+
 exports.getStreams = function (tmdbId, type, season, episode) {
   if (!tmdbId || !type) return Promise.resolve([]);
-  console.log(`[AnimeAV1] 1.1.0 Buscando: TMDB ${tmdbId} (${type}) S${season != null ? season : "-"}E${episode != null ? episode : "-"}`);
+  console.log(`[AnimeAV1] 1.1.2 Buscando: TMDB ${tmdbId} (${type}) S${season != null ? season : "-"}E${episode != null ? episode : "-"}`);
   var seasonNum = type === "movie" ? 1 : season ? Number(season) : 1;
   return Promise.all([getTMDBInfo(tmdbId, type), type === "movie" ? Promise.resolve(undefined) : getSeasonYear(tmdbId, seasonNum)]).then(function (pair) {
     var info = pair[0], tmdbSeasonYear = pair[1];
@@ -1729,5 +1796,5 @@ exports.getStreams = function (tmdbId, type, season, episode) {
         });
       });
     });
-  }).catch(function (e) { console.error(`[AnimeAV1] Error 1.1.1: ${e.message}`); return []; });
+  }).catch(function (e) { console.error(`[AnimeAV1] Error 1.1.2: ${e.message}`); return []; });
 };
