@@ -1,12 +1,12 @@
 {
   "name": "AnimeAV1",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "scrapers": [
     {
       "id": "AnimeAV1",
       "name": "AnimeAV1",
       "description": "Streams de anime (SUB/DUB) desde AnimeAV1 vía HLS y Voe HLS.",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "author": "-",
       "supportedTypes": ["movie", "tv"],
       "filename": "providers/animeav1.js",
