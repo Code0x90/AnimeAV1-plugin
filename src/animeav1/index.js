@@ -347,8 +347,45 @@ function wordSimilarity(target, candidate) {
   return matched / targetTokens.length
 }
 
+// Algunos catálogos usan un título corto/alias seguido del título largo entre
+// separadores, por ejemplo:
+//   WATAMOTE ~No Matter How I Look at It...~
+// Mientras AnimeAV1 puede devolver simplemente "Watamote!".
+// No usamos includes() indiscriminadamente: solo consideramos como alias los
+// segmentos iniciales claramente delimitados y luego exigimos igualdad exacta
+// tras normalización. Esto evita aceptar falsos positivos como "Naruto" por
+// el simple hecho de aparecer dentro de "Naruto Shippuden".
+function getTitleAliases(target) {
+  const raw = String(target || '').trim()
+  if (!raw) return []
+
+  const aliases = []
+  const add = (value) => {
+    const normalized = normalizeTitle(value)
+    if (!normalized || normalized.length < 3) return
+    if (!aliases.includes(normalized)) aliases.push(normalized)
+  }
+
+  // Alias/título corto al comienzo del título largo.
+  const prefix = raw.match(/^\s*(.+?)\s*(?:~|:|\s[-–—]\s|\(|\[)/)
+  if (prefix) add(prefix[1])
+
+  // En títulos que usan comillas alrededor de un subtítulo, conserva también
+  // el texto que queda antes de la primera comilla/apertura delimitadora.
+  const quotedPrefix = raw.match(/^\s*(.+?)\s*(?:["“”]|«)/)
+  if (quotedPrefix) add(quotedPrefix[1])
+
+  return aliases
+}
+
+function getAliasExactMatch(target, candidate) {
+  const normalizedCandidate = normalizeTitle(candidate)
+  if (!normalizedCandidate) return undefined
+  return getTitleAliases(target).find((alias) => alias === normalizedCandidate)
+}
+
 /**
- * Puntúa un candidato usando coincidencia por palabras + temporada.
+ * Puntúa un candidato usando coincidencia por palabras + alias + temporada.
  * El año se utiliza en la consulta a AnimeAV1 (minYear/maxYear), por lo que
  * no se inventa una puntuación de año que el resultado del catálogo no expone.
  *
@@ -359,12 +396,19 @@ function scoreCandidate(candidate, searchTerm, seasonNum) {
   const target = normalizeTitle(searchTerm)
   const normalizedCandidate = normalizeTitle(candidateTitle)
   const similarity = wordSimilarity(searchTerm, candidateTitle)
+  const aliasExact = getAliasExactMatch(searchTerm, candidateTitle)
   const explicitSeason = getExplicitSeason(candidateTitle)
 
   let score = similarity * 60
 
-  // Coincidencia exacta: máxima confianza de título.
+  // Coincidencia exacta del título completo: máxima confianza de título.
   if (normalizedCandidate === target) score += 30
+
+  // Coincidencia exacta con un alias/título corto explícitamente delimitado.
+  // Es deliberadamente una señal muy fuerte, pero no se activa para simples
+  // subcadenas. Así "Watamote!" puede representar el título largo de TMDB
+  // "WATAMOTE ~No Matter How I Look at It...~" sin relajar el umbral global.
+  if (aliasExact) score = Math.max(score, 100)
 
   if (seasonNum > 1) {
     if (explicitSeason === seasonNum) score += 45
@@ -378,7 +422,7 @@ function scoreCandidate(candidate, searchTerm, seasonNum) {
     score -= 55
   }
 
-  return { candidate, score, similarity, candidateSeason: explicitSeason }
+  return { candidate, score, similarity, candidateSeason: explicitSeason, aliasExact }
 }
 
 /**
@@ -412,13 +456,14 @@ function pickBestMatch(candidates, searchTerm, seasonNum) {
   const threshold = seasonNum > 1 ? 65 : 50
   const accepted = best.score >= threshold && (hasExpectedSeason || best.score >= 95)
 
-  console.log(`[AnimeAV1] Matching: ${scored.slice(0, 5).map((x) => `"${x.candidate.title}"=${x.score.toFixed(1)}`).join(' | ')}`)
-  console.log(`[AnimeAV1] Mejor match: "${best.candidate.title}" score=${best.score.toFixed(1)} gap=${gap.toFixed(1)} accepted=${accepted}`)
+  console.log(`[AnimeAV1] Matching: ${scored.slice(0, 5).map((x) => `"${x.candidate.title}"=${x.score.toFixed(1)}${x.aliasExact ? ' [alias]' : ''}`).join(' | ')}`)
+  console.log(`[AnimeAV1] Mejor match: "${best.candidate.title}" score=${best.score.toFixed(1)} gap=${gap.toFixed(1)}${best.aliasExact ? ' alias=true' : ''} accepted=${accepted}`)
 
   return {
     ...best,
     gap,
     accepted,
+    aliasExact: best.aliasExact,
     candidates: scored
   }
 }
@@ -768,7 +813,7 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
       return []
     }
 
-    // Matching 1.1.0: título por palabras + temporada + año de búsqueda.
+    // Matching 1.1.1: título por palabras + temporada + año de búsqueda.
     // TMDB aporta el año de la temporada; si el resultado es ambiguo, AniList
     // aporta el título romaji y vuelve a ejecutarse el matching.
     let seasonYear = type === "movie" ? info.year : tmdbSeasonYear
@@ -855,8 +900,9 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
         const variantsList = Array.isArray(resolved) ? resolved : [resolved]
 
         return variantsList.map((variant) => {
-          const sourceLabel = source.label
-          const label = `📺 ${sourceLabel}\n1080p | WEB-DL | Anime\n${getLangLabel(server.dub)}`
+          const sourceLabel = sourceKey === 'Voe' ? 'Voe 720p' : source.label
+          const resolution = sourceKey === 'Voe' ? '720p' : '1080p'
+          const label = `📺 ${sourceLabel}\n${resolution} | WEB-DL | Anime\n${getLangLabel(server.dub)}`
           return {
             name: `AnimeAV1`,
             title: "",     // vacío por pedido: toda la info visible va en quality
