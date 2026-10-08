@@ -1660,7 +1660,7 @@ function pickBestMatch110(candidates, searchTerm, seasonNum) {
   return { candidate: best.candidate, score: best.score, similarity: best.similarity, candidateSeason: best.candidateSeason, gap: gap, accepted: accepted, aliasExact: best.aliasExact, candidates: scored };
 }
 
-// AnimeAV1 1.1.2 — búsquedas progresivas + cache de candidatos
+// AnimeAV1 1.2.0 — búsquedas progresivas + cache de candidatos
 var SEARCH_CACHE_TTL_MS_112 = 5 * 60 * 1000;
 var animeAV1SearchCache112 = new Map();
 function isStrongSearchMatch112(candidates, searchTerm, seasonNum) {
@@ -1727,9 +1727,137 @@ searchAnimeAV1 = function (query, year, seasonNum) {
   });
 };
 
+
+
+// AnimeAV1 1.2.0 — resolver remoto como método principal + fallback local 1.1.2
+// Solo se resuelve/cacha identidad (TMDB + tipo + temporada -> slug). No se cachean URLs de streams.
+var ANIMEAV1_RESOLVER_URL = "https://animeav1-resolver.onrender.com";
+var RESOLVER_TIMEOUT_MS_120 = 4000;
+var RESOLVER_CACHE_TTL_MS_120 = 24 * 60 * 60 * 1000;
+var animeAV1ResolverCache120 = new Map();
+
+function getResolverCacheKey120(tmdbId, type, seasonNum) {
+  return `${tmdbId}|${type}|${seasonNum}`;
+}
+
+function fetchWithTimeout120(url, timeoutMs) {
+  return new Promise(function (resolve, reject) {
+    var settled = false;
+    var timer = setTimeout(function () {
+      if (settled) return;
+      settled = true;
+      reject(Error("Resolver timeout"));
+    }, timeoutMs);
+    fetch(url).then(function (response) {
+      if (!response || !response.ok) throw Error(`HTTP ${response ? response.status : "?"}`);
+      return response.json();
+    }).then(function (data) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(data);
+    }).catch(function (e) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(e);
+    });
+  });
+}
+
+function resolveAnimeAV1Remote120(tmdbId, type, seasonNum) {
+  var key = getResolverCacheKey120(tmdbId, type, seasonNum);
+  var cached = animeAV1ResolverCache120.get(key);
+  if (cached && Date.now() - cached.timestamp < RESOLVER_CACHE_TTL_MS_120) {
+    console.log(`[AnimeAV1] Resolver cache local: TMDB ${tmdbId} S${seasonNum} -> ${cached.slug}`);
+    return Promise.resolve(cached);
+  }
+  if (cached) animeAV1ResolverCache120.delete(key);
+
+  var url = `${ANIMEAV1_RESOLVER_URL}/resolve?tmdbId=${encodeURIComponent(tmdbId)}&type=${encodeURIComponent(type)}&season=${encodeURIComponent(seasonNum)}`;
+  console.log(`[AnimeAV1] Resolver remoto: TMDB ${tmdbId} (${type}) S${seasonNum}`);
+  return fetchWithTimeout120(url, RESOLVER_TIMEOUT_MS_120).then(function (data) {
+    if (!data || data.success !== true || typeof data.slug !== "string" || !data.slug.trim()) {
+      throw Error(data && data.error ? data.error : "Resolver sin slug válido");
+    }
+    var result = {
+      slug: data.slug.trim(),
+      title: data.animeav1Title || "",
+      score: typeof data.score === "number" ? data.score : undefined,
+      gap: typeof data.gap === "number" ? data.gap : undefined,
+      matchType: data.matchType || "remote",
+      timestamp: Date.now()
+    };
+    animeAV1ResolverCache120.set(key, result);
+    console.log(`[AnimeAV1] ✓ Resolver encontró: "${result.title}" (${result.slug}) score=${result.score != null ? result.score : "?"} tipo=${result.matchType}`);
+    return result;
+  });
+}
+
+function extractAnimeAV1Streams120(servers) {
+  var sourceOrder = Object.keys(SOURCE_EXTRACTORS);
+  servers = servers.filter(function (server) { return sourceOrder.some(function (key) { return server.name.indexOf(key) !== -1; }); });
+  servers.sort(function (a, b) {
+    var ai = sourceOrder.findIndex(function (key) { return a.name.indexOf(key) !== -1; });
+    var bi = sourceOrder.findIndex(function (key) { return b.name.indexOf(key) !== -1; });
+    if (ai !== bi) return ai - bi;
+    return (a.dub ? 1 : 0) - (b.dub ? 1 : 0);
+  });
+  return Promise.all(servers.map(function (server) {
+    var sourceKey = Object.keys(SOURCE_EXTRACTORS).find(function (key) { return server.name.indexOf(key) !== -1; });
+    var source = sourceKey ? SOURCE_EXTRACTORS[sourceKey] : null;
+    if (!source) return null;
+    return source.extract(server.url).then(function (resolved) {
+      var variants = Array.isArray(resolved) ? resolved : [resolved];
+      return variants.map(function (variant) {
+        return { name: "AnimeAV1", title: "", url: variant.url, quality: `📺 ${sourceKey === "Voe" ? "Voe 720p" : source.label}\n${sourceKey === "Voe" ? "720p" : "1080p"} | WEB-DL | Anime\n${getLangLabel(server.dub)}`, headers: variant.headers, type: "hls" };
+      });
+    }).catch(function (e) { console.warn(`[${source.label}] Falló resolviendo un servidor: ${e.message}`); return null; });
+  })).then(function (results) {
+    var final = results.filter(Boolean).reduce(function (all, item) { return all.concat(item); }, []);
+    var seen = new Set();
+    var unique = final.filter(function (stream) {
+      var key = `${stream.url}|${stream.quality}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    console.log(`[AnimeAV1] ✓ ${unique.length} streams devueltos`);
+    return unique;
+  });
+}
+
 exports.getStreams = function (tmdbId, type, season, episode) {
   if (!tmdbId || !type) return Promise.resolve([]);
-  console.log(`[AnimeAV1] 1.1.2 Buscando: TMDB ${tmdbId} (${type}) S${season != null ? season : "-"}E${episode != null ? episode : "-"}`);
+  var seasonNum = type === "movie" ? 1 : season ? Number(season) : 1;
+  var epNumber = type === "movie" ? 1 : episode !== undefined ? Number(episode) : 1;
+  console.log(`[AnimeAV1] 1.2.0 Resolviendo: TMDB ${tmdbId} (${type}) S${seasonNum}E${epNumber}`);
+
+  // Ruta principal: un único request al resolver por temporada, reutilizado localmente durante 24 h.
+  return resolveAnimeAV1Remote120(tmdbId, type, seasonNum).then(function (resolved) {
+    return getEpisodeServers(resolved.slug, epNumber).then(function (servers) {
+      if (!servers.length && type === "movie" && epNumber === 1) return getEpisodeServers(resolved.slug, 0);
+      if (!servers.length) throw Error("Slug remoto válido pero sin servidores");
+      console.log(`[AnimeAV1] Match remoto elegido: "${resolved.title || resolved.slug}" (${resolved.slug})`);
+      return extractAnimeAV1Streams120(servers);
+    }).catch(function (e) {
+      // Si el mapping remoto quedó obsoleto, no lo conservamos: el fallback local vuelve a resolver.
+      console.warn(`[AnimeAV1] Resolver remoto no pudo obtener servidores: ${e.message}; fallback local`);
+      animeAV1ResolverCache120.delete(getResolverCacheKey120(tmdbId, type, seasonNum));
+      return resolveAnimeAV1Local120(tmdbId, type, season, episode);
+    });
+  }).catch(function (e) {
+    // Render caído, timeout, HTTP error o respuesta inválida -> método local 1.1.2.
+    console.warn(`[AnimeAV1] Resolver remoto falló: ${e.message}; fallback local 1.1.2`);
+    return resolveAnimeAV1Local120(tmdbId, type, season, episode);
+  }).catch(function (e) {
+    console.error(`[AnimeAV1] Error 1.2.0: ${e.message}`);
+    return [];
+  });
+};
+function resolveAnimeAV1Local120(tmdbId, type, season, episode) {
+  if (!tmdbId || !type) return Promise.resolve([]);
+  console.log(`[AnimeAV1] Fallback local 1.1.2: TMDB ${tmdbId} (${type}) S${season != null ? season : "-"}E${episode != null ? episode : "-"}`);
   var seasonNum = type === "movie" ? 1 : season ? Number(season) : 1;
   return Promise.all([getTMDBInfo(tmdbId, type), type === "movie" ? Promise.resolve(undefined) : getSeasonYear(tmdbId, seasonNum)]).then(function (pair) {
     var info = pair[0], tmdbSeasonYear = pair[1];
