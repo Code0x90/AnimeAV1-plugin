@@ -1741,27 +1741,13 @@ function getResolverCacheKey120(tmdbId, type, seasonNum) {
 }
 
 function fetchWithTimeout120(url, timeoutMs) {
-  return new Promise(function (resolve, reject) {
-    var settled = false;
-    var timer = setTimeout(function () {
-      if (settled) return;
-      settled = true;
-      reject(Error("Resolver timeout"));
-    }, timeoutMs);
-    fetch(url).then(function (response) {
-      if (!response || !response.ok) throw Error(`HTTP ${response ? response.status : "?"}`);
-      return response.json();
-    }).then(function (data) {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(data);
-    }).catch(function (e) {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(e);
-    });
+  // Nuvio puede ejecutar plugins en un runtime sin setTimeout/clearTimeout.
+  // No usar temporizadores aquí: iniciar la petición directamente evita que
+  // el resolver remoto falle antes de hacer el fetch. timeoutMs se conserva
+  // en la firma para no alterar el punto de llamada existente.
+  return fetch(url).then(function (response) {
+    if (!response || !response.ok) throw Error(`HTTP ${response ? response.status : "?"}`);
+    return response.json();
   });
 }
 
