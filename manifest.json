@@ -1,12 +1,12 @@
 {
   "name": "AnimeAV1",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "scrapers": [
     {
       "id": "AnimeAV1",
       "name": "AnimeAV1",
-      "description": "Prueba de resolución local para anime; omite temporalmente el resolver remoto.",
-      "version": "1.2.3",
+      "description": "Streams de anime (SUB/DUB) desde AnimeAV1; resolver remoto principal con fallback local TMDB/AniList.",
+      "version": "1.2.4",
       "author": "-",
       "supportedTypes": [
         "movie",

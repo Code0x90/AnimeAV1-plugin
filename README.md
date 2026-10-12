@@ -1,25 +1,16 @@
-# AnimeAV1 Nuvio Provider 1.2.0
+# AnimeAV1 Nuvio Provider 1.2.4
 
-Provider AnimeAV1 para Nuvio/Kino. Esta versión usa el **AnimeAV1 Resolver** como método principal para identificar el anime y conserva el matching local de 1.1.2 como fallback.
+Esta versión utiliza el resolver remoto como primera opción. Si el servicio remoto falla, devuelve un slug sin servidores o no se obtienen streams reproducibles, el provider activa la resolución local con TMDB, títulos alternativos de TMDB, AniList y sinónimos, y el catálogo de AnimeAV1.
 
-## Flujo
+Los extractores HLS-Zilla y Voe se mantienen. La fuente editable está en `src/animeav1/index.js`; el bundle consumido por Nuvio está en `providers/animeav1.js`.
 
-1. `TMDB ID + tipo + temporada` -> `https://animeav1-resolver.onrender.com/resolve`
-2. El resolver devuelve el `slug` de AnimeAV1.
-3. El plugin consulta directamente los servidores del episodio usando ese slug.
-4. El mapping se guarda en memoria durante 24 horas por `TMDB + tipo + temporada`.
-5. Si Render falla, hace timeout, devuelve un resultado inválido o el slug válido no tiene servidores, se usa automáticamente el matching local 1.1.2.
+## Compilar desde la fuente
 
-No se cachean URLs HLS/Voe ni streams firmados.
+```bash
+npm install
+npm run build -- animeav1
+```
 
-## Instalación
+## Comprobar con ADB
 
-Usar `providers/animeav1.js` como provider y `manifest.json` para la versión 1.2.0.
-
-## Resolver
-
-El endpoint usado por defecto es:
-
-`https://animeav1-resolver.onrender.com`
-
-El provider no necesita ninguna variable de entorno para usarlo.
+Durante la prueba deben aparecer `[AnimeAV1] 1.2.4 (remoto principal + fallback local) Resolviendo`. Si el remoto responde, aparecerá `Resolver remoto encontró` y después `Resolver remoto confirmó slug`. Si falla, aparecerá `Resolver remoto falló ... se activa fallback local` y registros de `Fallback local 1.2.4`.

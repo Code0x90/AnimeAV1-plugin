@@ -1740,7 +1740,7 @@ searchAnimeAV1 = function (query, year, seasonNum) {
 
 
 
-// AnimeAV1 1.2.0 — resolver remoto como método principal + fallback local 1.2.3
+// AnimeAV1 1.2.0 — resolver remoto como método principal + fallback local 1.2.4
 // Solo se resuelve/cacha identidad (TMDB + tipo + temporada -> slug). No se cachean URLs de streams.
 var ANIMEAV1_RESOLVER_URL = "https://animeav1-resolver.onrender.com";
 var RESOLVER_TIMEOUT_MS_120 = 4000;
@@ -1748,7 +1748,7 @@ var RESOLVER_CACHE_TTL_MS_120 = 24 * 60 * 60 * 1000;
 var animeAV1ResolverCache120 = new Map();
 
 // Modo de prueba: permite ejercitar el resolver local incluso si el remoto responde.
-var FORCE_LOCAL_RESOLVER_TEST_122 = true;
+var FORCE_LOCAL_RESOLVER_TEST_122 = false;
 
 function getResolverCacheKey120(tmdbId, type, seasonNum) {
   return `${tmdbId}|${type}|${seasonNum}`;
@@ -1831,13 +1831,13 @@ exports.getStreams = function (tmdbId, type, season, episode) {
   if (!tmdbId || !type) return Promise.resolve([]);
   var seasonNum = type === "movie" ? 1 : season ? Number(season) : 1;
   var epNumber = type === "movie" ? 1 : episode !== undefined ? Number(episode) : 1;
-  console.log(`[AnimeAV1] 1.2.3 Resolviendo: TMDB ${tmdbId} (${type}) S${seasonNum}E${epNumber}`);
+  console.log(`[AnimeAV1] 1.2.4 (remoto principal + fallback local) Resolviendo: TMDB ${tmdbId} (${type}) S${seasonNum}E${epNumber}`);
 
   // Interruptor de diagnóstico: permite comprobar el resolver local sin depender del servidor remoto.
   if (FORCE_LOCAL_RESOLVER_TEST_122) {
-    console.warn("[AnimeAV1] MODO DE PRUEBA 1.2.3: se omite el resolver remoto y se fuerza la resolución local");
+    console.warn("[AnimeAV1] MODO DE PRUEBA 1.2.4: se omite el resolver remoto y se fuerza la resolución local");
     return resolveAnimeAV1Local120(tmdbId, type, season, episode).catch(function (e) {
-      console.error(`[AnimeAV1] Error en prueba local 1.2.3: ${e.message}`);
+      console.error(`[AnimeAV1] Error en prueba local 1.2.4: ${e.message}`);
       return [];
     });
   }
@@ -1857,15 +1857,15 @@ exports.getStreams = function (tmdbId, type, season, episode) {
     });
   }).catch(function (e) {
     // Render caído, timeout, HTTP error o respuesta inválida -> método local 1.2.2.
-    console.warn(`[AnimeAV1] Resolver remoto falló: ${e.message}; fallback local 1.2.3`);
+    console.warn(`[AnimeAV1] Resolver remoto falló: ${e.message}; fallback local 1.2.4`);
     return resolveAnimeAV1Local120(tmdbId, type, season, episode);
   }).catch(function (e) {
-    console.error(`[AnimeAV1] Error 1.2.3: ${e.message}`);
+    console.error(`[AnimeAV1] Error 1.2.4: ${e.message}`);
     return [];
   });
 };
 // ─────────────────────────────────────────────────────────────────────────────
-// AnimeAV1 1.2.3 — resolución local basada en TMDB + AniList + catálogo
+// AnimeAV1 1.2.4 — resolución local basada en TMDB + AniList + catálogo
 // ─────────────────────────────────────────────────────────────────────────────
 
 function getTMDBSeasonInfo122(tmdbId, seasonNum) {
@@ -2122,7 +2122,7 @@ function resolveAnimeAV1LocalFresh122(tmdbId, type, season, episode, cacheKey) {
   if (!tmdbId || !type) return Promise.resolve([]);
   var seasonNum = type === "movie" ? 1 : (season ? Number(season) : 1);
   var epNumber = type === "movie" ? 1 : (episode !== undefined ? Number(episode) : 1);
-  console.log(`[AnimeAV1] Fallback local 1.2.3: TMDB ${tmdbId} (${type}) S${seasonNum}E${epNumber}`);
+  console.log(`[AnimeAV1] Fallback local 1.2.4: TMDB ${tmdbId} (${type}) S${seasonNum}E${epNumber}`);
 
   var seasonPromise = type === "movie"
     ? Promise.resolve({ year: undefined, name: "", airDate: "" })
@@ -2240,12 +2240,12 @@ function resolveAnimeAV1LocalFresh122(tmdbId, type, season, episode, cacheKey) {
         return tryCatalogTerms122(aliasTerms, 0, aliInfo.year || seasonYear, "AniList/TMDB");
       });
     }).then(function (streams) {
-      if (!streams || !streams.length) console.warn(`[AnimeAV1] Resolver local 1.2.3 no pudo obtener streams para TMDB ${tmdbId} S${seasonNum}E${epNumber}`);
-      else console.log(`[AnimeAV1] ✓ Resolver local 1.2.3 devolvió ${streams.length} streams`);
+      if (!streams || !streams.length) console.warn(`[AnimeAV1] Resolver local 1.2.4 no pudo obtener streams para TMDB ${tmdbId} S${seasonNum}E${epNumber}`);
+      else console.log(`[AnimeAV1] ✓ Resolver local 1.2.4 devolvió ${streams.length} streams`);
       return streams || [];
     });
   }).catch(function (e) {
-    console.error(`[AnimeAV1] Error del resolver local 1.2.3: ${e.message}`);
+    console.error(`[AnimeAV1] Error del resolver local 1.2.4: ${e.message}`);
     return [];
   });
 }
