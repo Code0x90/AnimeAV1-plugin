@@ -820,7 +820,7 @@ function getTMDBInfo(_x, _x2) {
 }
 function _getTMDBInfo() {
   _getTMDBInfo = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee3(tmdbId, type) {
-    var path, url, data, title, originalTitle, originalLanguage, titleAliases, dateStr, year, originCountries, genreIds, isAnimation;
+    var path, url, data, title, dateStr, year, originCountries, genreIds, isAnimation;
     return _regenerator().w(function (_context3) {
       while (1) switch (_context3.n) {
         case 0:
@@ -843,9 +843,6 @@ function _getTMDBInfo() {
           return _context3.a(2, null);
         case 2:
           title = data.title || data.name || data.original_title || data.original_name;
-          originalTitle = data.original_title || data.original_name || "";
-          originalLanguage = data.original_language || "";
-          titleAliases = Array.from(new Set([title, originalTitle].filter(Boolean)));
           dateStr = data.release_date || data.first_air_date;
           year = dateStr ? new Date(dateStr).getFullYear() : void 0;
           if (title) {
@@ -863,9 +860,6 @@ function _getTMDBInfo() {
           isAnimation = genreIds.includes(16);
           return _context3.a(2, {
             title,
-            originalTitle,
-            originalLanguage,
-            titleAliases,
             year,
             originCountries,
             isAnimation
@@ -942,7 +936,6 @@ function _getAniListInfo() {
         media(search: $search, type: ANIME, sort: SEARCH_MATCH) {
           id
           title { romaji english }
-          synonyms
           seasonYear
           startDate { year month day }
         }
@@ -1002,8 +995,6 @@ function _getAniListInfo() {
             var sortKey = (sd == null ? void 0 : sd.year) ? `${sd.year}-${String(sd.month || 1).padStart(2, "0")}-${String(sd.day || 1).padStart(2, "0")}` : `${year}-01-01`;
             return {
               title: (_b2 = m.title) == null ? void 0 : _b2.romaji,
-              englishTitle: (_b2 = m.title) == null ? void 0 : _b2.english,
-              synonyms: Array.isArray(m.synonyms) ? m.synonyms : [],
               year,
               sortKey
             };
@@ -1024,9 +1015,7 @@ function _getAniListInfo() {
           console.log(`[AniList] Temporada ${seasonNum} -> "${target.title}" year=${target.year}`);
           return _context5.a(2, {
             year: target.year,
-            romajiTitle: target.title,
-            englishTitle: target.englishTitle || "",
-            synonyms: Array.isArray(target.synonyms) ? target.synonyms : []
+            romajiTitle: target.title
           });
         case 7:
           _context5.p = 7;
@@ -1740,15 +1729,12 @@ searchAnimeAV1 = function (query, year, seasonNum) {
 
 
 
-// AnimeAV1 1.2.0 — resolver remoto como método principal + fallback local 1.2.4
+// AnimeAV1 1.2.0 — resolver remoto como método principal + fallback local 1.1.2
 // Solo se resuelve/cacha identidad (TMDB + tipo + temporada -> slug). No se cachean URLs de streams.
 var ANIMEAV1_RESOLVER_URL = "https://animeav1-resolver.onrender.com";
 var RESOLVER_TIMEOUT_MS_120 = 4000;
 var RESOLVER_CACHE_TTL_MS_120 = 24 * 60 * 60 * 1000;
 var animeAV1ResolverCache120 = new Map();
-
-// Modo de prueba: permite ejercitar el resolver local incluso si el remoto responde.
-var FORCE_LOCAL_RESOLVER_TEST_122 = false;
 
 function getResolverCacheKey120(tmdbId, type, seasonNum) {
   return `${tmdbId}|${type}|${seasonNum}`;
@@ -1831,18 +1817,9 @@ exports.getStreams = function (tmdbId, type, season, episode) {
   if (!tmdbId || !type) return Promise.resolve([]);
   var seasonNum = type === "movie" ? 1 : season ? Number(season) : 1;
   var epNumber = type === "movie" ? 1 : episode !== undefined ? Number(episode) : 1;
-  console.log(`[AnimeAV1] 1.2.4 (remoto principal + fallback local) Resolviendo: TMDB ${tmdbId} (${type}) S${seasonNum}E${epNumber}`);
+  console.log(`[AnimeAV1] 1.2.0 Resolviendo: TMDB ${tmdbId} (${type}) S${seasonNum}E${epNumber}`);
 
-  // Interruptor de diagnóstico: permite comprobar el resolver local sin depender del servidor remoto.
-  if (FORCE_LOCAL_RESOLVER_TEST_122) {
-    console.warn("[AnimeAV1] MODO DE PRUEBA 1.2.4: se omite el resolver remoto y se fuerza la resolución local");
-    return resolveAnimeAV1Local120(tmdbId, type, season, episode).catch(function (e) {
-      console.error(`[AnimeAV1] Error en prueba local 1.2.4: ${e.message}`);
-      return [];
-    });
-  }
-
-  // Ruta principal: resolver remoto; si falla, la lógica de resolución local 1.2.2 entra como fallback.
+  // Ruta principal: un único request al resolver por temporada, reutilizado localmente durante 24 h.
   return resolveAnimeAV1Remote120(tmdbId, type, seasonNum).then(function (resolved) {
     return getEpisodeServers(resolved.slug, epNumber).then(function (servers) {
       if (!servers.length && type === "movie" && epNumber === 1) return getEpisodeServers(resolved.slug, 0);
@@ -1856,396 +1833,82 @@ exports.getStreams = function (tmdbId, type, season, episode) {
       return resolveAnimeAV1Local120(tmdbId, type, season, episode);
     });
   }).catch(function (e) {
-    // Render caído, timeout, HTTP error o respuesta inválida -> método local 1.2.2.
-    console.warn(`[AnimeAV1] Resolver remoto falló: ${e.message}; fallback local 1.2.4`);
+    // Render caído, timeout, HTTP error o respuesta inválida -> método local 1.1.2.
+    console.warn(`[AnimeAV1] Resolver remoto falló: ${e.message}; fallback local 1.1.2`);
     return resolveAnimeAV1Local120(tmdbId, type, season, episode);
   }).catch(function (e) {
-    console.error(`[AnimeAV1] Error 1.2.4: ${e.message}`);
+    console.error(`[AnimeAV1] Error 1.2.0: ${e.message}`);
     return [];
   });
 };
-// ─────────────────────────────────────────────────────────────────────────────
-// AnimeAV1 1.2.4 — resolución local basada en TMDB + AniList + catálogo
-// ─────────────────────────────────────────────────────────────────────────────
-
-function getTMDBSeasonInfo122(tmdbId, seasonNum) {
-  var url = `https://api.themoviedb.org/3/tv/${tmdbId}/season/${seasonNum}?api_key=${TMDB_API_KEY}&language=en-US`;
-  return fetch(url, { headers: { "User-Agent": UA } }).then(function (r) {
-    if (!r.ok) throw Error(`HTTP ${r.status}`);
-    return r.json();
-  }).then(function (data) {
-    var airDate = data && data.air_date;
-    var year = airDate ? new Date(airDate).getFullYear() : undefined;
-    return { year: year, name: data && (data.name || data.original_name) || "", airDate: airDate || "" };
-  }).catch(function (e) {
-    console.warn(`[TMDB] Datos de temporada no disponibles para S${seasonNum}: ${e.message}`);
-    return { year: undefined, name: "", airDate: "" };
-  });
-}
-
-function getTMDBAlternativeTitles122(tmdbId, type) {
-  var path = type === "movie" ? "movie" : "tv";
-  var url = `https://api.themoviedb.org/3/${path}/${tmdbId}/alternative_titles?api_key=${TMDB_API_KEY}`;
-  return fetch(url, { headers: { "User-Agent": UA } }).then(function (r) {
-    if (!r.ok) throw Error(`HTTP ${r.status}`);
-    return r.json();
-  }).then(function (data) {
-    var rows = type === "movie" ? data && data.titles : data && data.results;
-    if (!Array.isArray(rows)) return [];
-    var usefulCountries = new Set(["US", "JP", "KR", "CN", "TW", "HK"]);
-    return rows.filter(function (row) {
-      return row && typeof row.title === "string" && row.title.trim().length >= 3 && (!row.iso_3166_1 || usefulCountries.has(row.iso_3166_1));
-    }).map(function (row) { return row.title.trim(); }).filter(function (value, index, values) {
-      return values.findIndex(function (other) { return normalizeTitle110(other) === normalizeTitle110(value); }) === index;
-    }).slice(0, 8);
-  }).catch(function (e) {
-    console.warn(`[TMDB] Títulos alternativos no disponibles: ${e.message}`);
-    return [];
-  });
-}
-
-function uniqueTitles122(values, maxCount) {
-  var result = [];
-  var seen = new Set();
-  (values || []).forEach(function (value) {
-    var raw = String(value || "").trim();
-    var key = normalizeTitle110(raw);
-    // Evitar búsquedas ruidosas para etiquetas genéricas de temporada devueltas por TMDB.
-    if (/^(?:season\s*\d+|\d+(?:st|nd|rd|th)?\s+season|part\s*\d+)$/.test(key)) return;
-    if (!key || key.length < 3 || seen.has(key)) return;
-    seen.add(key);
-    result.push(raw);
-  });
-  return typeof maxCount === "number" ? result.slice(0, maxCount) : result;
-}
-
-function fetchAniListCandidates122(title) {
-  var query = `query ($search: String) {
-    Page(page: 1, perPage: 25) {
-      media(search: $search, type: ANIME, sort: SEARCH_MATCH) {
-        id
-        title { romaji english native }
-        synonyms
-        seasonYear
-        startDate { year month day }
-        format
-      }
-    }
-  }`;
-  return fetch("https://graphql.anilist.co", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Accept": "application/json" },
-    body: JSON.stringify({ query: query, variables: { search: title } })
-  }).then(function (resp) {
-    if (!resp.ok) throw Error(`HTTP ${resp.status}`);
-    return resp.json();
-  }).then(function (json) {
-    var rows = json && json.data && json.data.Page && json.data.Page.media;
-    return Array.isArray(rows) ? rows : [];
-  });
-}
-
-function mediaYear122(media) {
-  return Number(media && (media.seasonYear || (media.startDate && media.startDate.year))) || undefined;
-}
-
-function scoreAniListMedia122(media, sourceTitles, targetYear) {
-  var title = media && media.title || {};
-  var named = [
-    { value: title.romaji || "", kind: "title" },
-    { value: title.english || "", kind: "title" },
-    { value: title.native || "", kind: "title" }
-  ];
-  (Array.isArray(media && media.synonyms) ? media.synonyms : []).forEach(function (s) {
-    named.push({ value: s || "", kind: "synonym" });
-  });
-  var bestTitleScore = 0;
-  var bestMatchType = "title-similarity";
-  var bestMatchedTerm = "";
-  sourceTitles.forEach(function (sourceTitle) {
-    var target = normalizeTitle110(sourceTitle);
-    if (!target) return;
-    named.forEach(function (candidateName) {
-      var candidate = normalizeTitle110(candidateName.value);
-      if (!candidate) return;
-      var score = 0;
-      if (candidate === target) {
-        score = candidateName.kind === "synonym" ? 130 : 120;
-      } else if (target.length >= 5 && candidate.length >= 5 && (candidate.indexOf(target) !== -1 || target.indexOf(candidate) !== -1)) {
-        var ratio = Math.min(target.length, candidate.length) / Math.max(target.length, candidate.length);
-        score = 82 + ratio * 12;
-      } else {
-        var a = new Set(titleTokens110(sourceTitle));
-        var b = new Set(titleTokens110(candidateName.value));
-        if (!a.size || !b.size) return;
-        var overlap = 0;
-        a.forEach(function (token) { if (b.has(token)) overlap++; });
-        var coverage = overlap / a.size;
-        var precision = overlap / b.size;
-        var symmetric = overlap ? (2 * overlap / (a.size + b.size)) : 0;
-        score = Math.max(coverage * 58 + precision * 12, symmetric * 78);
-      }
-      if (score > bestTitleScore) {
-        bestTitleScore = score;
-        bestMatchType = candidateName.kind === "synonym" && score >= 120 ? "anilist-synonym" : (score >= 120 ? "anilist-title" : "title-similarity");
-        bestMatchedTerm = sourceTitle;
-      }
-    });
-  });
-
-  var year = mediaYear122(media);
-  var yearBonus = 0;
-  if (targetYear && year) {
-    var diff = Math.abs(year - targetYear);
-    if (diff === 0) yearBonus = 26;
-    else if (diff === 1) yearBonus = 12;
-    else if (diff === 2) yearBonus = 3;
-    else yearBonus = -Math.min(30, (diff - 2) * 5);
-  }
-  return { media: media, year: year, titleScore: bestTitleScore, score: bestTitleScore + yearBonus, matchType: bestMatchType, matchedTerm: bestMatchedTerm };
-}
-
-function resolveAniListIdentity122(info, seasonNum, targetYear, extraTitles) {
-  var sourceTitles = uniqueTitles122([info && info.title, info && info.originalTitle].concat(extraTitles || []), 12);
-  var queries = uniqueTitles122([info && info.title, info && info.originalTitle].concat(extraTitles || []), 3);
-  if (!queries.length) return Promise.resolve(undefined);
-
-  var all = [];
-  var tryQuery = function (index) {
-    if (index >= queries.length) {
-      if (!all.length) return Promise.resolve(undefined);
-      var scored = all.map(function (media) { return scoreAniListMedia122(media, sourceTitles, targetYear); }).sort(function (a, b) { return b.score - a.score; });
-      var best = scored[0];
-      if (!best || best.titleScore < 52) {
-        console.warn(`[AniList] Resolución local: ningún título alcanza confianza suficiente para "${info.title}"`);
-        return Promise.resolve(undefined);
-      }
-
-      var bestRomaji = best.media && best.media.title && best.media.title.romaji || "";
-      var base = normalizeTitle110(anilistBaseTitle(bestRomaji || ""));
-      var related = scored.filter(function (entry) {
-        var romaji = entry.media && entry.media.title && entry.media.title.romaji || "";
-        return base && normalizeTitle110(anilistBaseTitle(romaji)) === base;
-      });
-      var selected = best;
-      if (related.length > 1 && targetYear) {
-        related.sort(function (a, b) {
-          var da = a.year ? Math.abs(a.year - targetYear) : 9999;
-          var db = b.year ? Math.abs(b.year - targetYear) : 9999;
-          if (da !== db) return da - db;
-          return b.titleScore - a.titleScore;
-        });
-        selected = related[0];
-      } else if (related.length > 1 && seasonNum > 1) {
-        related.sort(function (a, b) {
-          var da = a.media.startDate || {}, db = b.media.startDate || {};
-          var ak = `${da.year || a.year || 9999}-${String(da.month || 1).padStart(2, "0")}-${String(da.day || 1).padStart(2, "0")}`;
-          var bk = `${db.year || b.year || 9999}-${String(db.month || 1).padStart(2, "0")}-${String(db.day || 1).padStart(2, "0")}`;
-          return ak.localeCompare(bk);
-        });
-        if (related.length >= seasonNum) selected = related[seasonNum - 1];
-      }
-
-      var media = selected.media;
-      var mt = media && media.title || {};
-      var synonyms = Array.isArray(media && media.synonyms) ? media.synonyms : [];
-      var pickedYear = selected.year || targetYear;
-      console.log(`[AniList] Resolver local: "${mt.romaji || mt.english || "?"}" year=${pickedYear || "?"} score=${selected.score.toFixed(1)} match=${selected.matchType}`);
-      return Promise.resolve({
-        year: pickedYear,
-        romajiTitle: mt.romaji || "",
-        englishTitle: mt.english || "",
-        nativeTitle: mt.native || "",
-        synonyms: synonyms,
-        anilistId: media.id,
-        matchType: selected.matchType,
-        score: selected.score
-      });
-    }
-
-    var query = queries[index];
-    return fetchAniListCandidates122(query).then(function (rows) {
-      rows.forEach(function (row) {
-        if (row && row.id != null && !all.some(function (seen) { return seen.id === row.id; })) all.push(row);
-      });
-      return tryQuery(index + 1);
-    }).catch(function (e) {
-      console.warn(`[AniList] Búsqueda local "${query}" falló: ${e.message}`);
-      return tryQuery(index + 1);
-    });
-  };
-  return tryQuery(0);
-}
-
-function pickBestMatchLocal122(candidates, searchTerm, seasonNum, yearFiltered) {
-  var picked = pickBestMatch110(candidates, searchTerm, seasonNum);
-  if (!picked) return picked;
-  // En temporadas posteriores, un título idéntico + una búsqueda filtrada por el año de la temporada
-  // es evidencia suficiente aunque AnimeAV1 omita el sufijo "Season N" del título.
-  if (!picked.accepted && yearFiltered && seasonNum > 1 && picked.candidateSeason === undefined && picked.score >= 85) {
-    picked.accepted = true;
-    picked.matchType = "exact-title-season-year";
-    console.log(`[AnimeAV1] Coincidencia aceptada por título + año TMDB: "${picked.candidate.title}" score=${picked.score.toFixed(1)}`);
-  }
-  return picked;
-}
-
-var LOCAL_RESOLVER_CACHE_TTL_MS_122 = 24 * 60 * 60 * 1000;
-var animeAV1LocalResolverCache122 = new Map();
-
 function resolveAnimeAV1Local120(tmdbId, type, season, episode) {
   if (!tmdbId || !type) return Promise.resolve([]);
-  var seasonNum = type === "movie" ? 1 : (season ? Number(season) : 1);
-  var epNumber = type === "movie" ? 1 : (episode !== undefined ? Number(episode) : 1);
-  var cacheKey = getResolverCacheKey120(tmdbId, type, seasonNum);
-  var cached = animeAV1LocalResolverCache122.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < LOCAL_RESOLVER_CACHE_TTL_MS_122) {
-    console.log(`[AnimeAV1] Resolver local cache: TMDB ${tmdbId} S${seasonNum} -> ${cached.slug}`);
-    return getEpisodeServers(cached.slug, epNumber).then(function (servers) {
-      if (!servers.length && type === "movie" && epNumber === 1) return getEpisodeServers(cached.slug, 0);
-      if (!servers.length) throw Error("Slug en caché sin servidores para este episodio");
-      return extractAnimeAV1Streams120(servers);
-    }).then(function (streams) {
-      if (!streams || !streams.length) throw Error("Slug en caché no produjo streams");
-      return streams;
-    }).catch(function (e) {
-      console.warn(`[AnimeAV1] Caché local inválida para "${cached.slug}": ${e.message}; se resolverá de nuevo`);
-      animeAV1LocalResolverCache122.delete(cacheKey);
-      return resolveAnimeAV1LocalFresh122(tmdbId, type, season, episode, cacheKey);
-    });
-  }
-  if (cached) animeAV1LocalResolverCache122.delete(cacheKey);
-  return resolveAnimeAV1LocalFresh122(tmdbId, type, season, episode, cacheKey);
-}
-
-function resolveAnimeAV1LocalFresh122(tmdbId, type, season, episode, cacheKey) {
-  if (!tmdbId || !type) return Promise.resolve([]);
-  var seasonNum = type === "movie" ? 1 : (season ? Number(season) : 1);
-  var epNumber = type === "movie" ? 1 : (episode !== undefined ? Number(episode) : 1);
-  console.log(`[AnimeAV1] Fallback local 1.2.4: TMDB ${tmdbId} (${type}) S${seasonNum}E${epNumber}`);
-
-  var seasonPromise = type === "movie"
-    ? Promise.resolve({ year: undefined, name: "", airDate: "" })
-    : getTMDBSeasonInfo122(tmdbId, seasonNum);
-
-  return Promise.all([getTMDBInfo(tmdbId, type), seasonPromise, getTMDBAlternativeTitles122(tmdbId, type)]).then(function (result) {
-    var info = result[0], seasonInfo = result[1], tmdbAltTitles = result[2] || [];
-    if (!info) {
-      console.warn(`[AnimeAV1] TMDB no devolvió información para ${tmdbId}`);
-      return [];
-    }
-    if (!looksLikeAnime(info)) {
-      console.warn(`[AnimeAV1] Contenido descartado por filtro de anime: "${info.title}"`);
-      return [];
-    }
-
-    var seasonYear = type === "movie" ? info.year : (seasonInfo.year || info.year);
-    var directTerms = uniqueTitles122([
-      seasonNum > 1 && type !== "movie" ? `${info.title} ${seasonNum}` : info.title,
-      info.title,
-      info.originalTitle,
-      seasonInfo.name
-    ].concat(tmdbAltTitles), 10);
-    var triedSlugs = new Set();
-    var triedTerms = new Set();
-
-    // Para cada título, se intenta primero el año TMDB y luego una búsqueda sin año si el filtro anual falla.
-    // Solo se acepta un candidato con confianza suficiente; el primer resultado sin relación no se elige por defecto.
-    var tryCatalogTerms122 = function (terms, termIndex, searchYear, originLabel) {
-      if (termIndex >= terms.length) return Promise.resolve([]);
-      var termEntry = typeof terms[termIndex] === "string" ? { term: terms[termIndex], origin: originLabel || "título" } : terms[termIndex];
-      var term = String(termEntry.term || "").trim();
-      var normalizedTerm = normalizeTitle110(term);
-      if (!normalizedTerm || triedTerms.has(normalizedTerm)) return tryCatalogTerms122(terms, termIndex + 1, searchYear, originLabel);
-      triedTerms.add(normalizedTerm);
-
-      var attempt = function (yearToUse, yearFiltered) {
-        return searchAnimeAV1(term, yearToUse, seasonNum).then(function (candidates) {
-          var matchInfo = pickBestMatchLocal122(candidates, term, seasonNum, yearFiltered);
-          if (!matchInfo || !matchInfo.accepted) return null;
-          var match = matchInfo.candidate;
-          if (!match || !match.slug || triedSlugs.has(match.slug)) return null;
-          triedSlugs.add(match.slug);
-          console.log(`[AnimeAV1] Match local (${termEntry.origin || "título"}): "${match.title}" slug=${match.slug} score=${matchInfo.score.toFixed(1)} term="${term}"`);
-          return getEpisodeServers(match.slug, epNumber).then(function (servers) {
-            if (!servers.length && type === "movie" && epNumber === 1) return getEpisodeServers(match.slug, 0);
-            if (!servers.length) {
-              console.warn(`[AnimeAV1] El candidato "${match.title}" no tiene servidores para E${epNumber}; se probará otra alternativa`);
-              return [];
-            }
-            return extractAnimeAV1Streams120(servers).then(function (streams) {
-              if (streams && streams.length) {
-                animeAV1LocalResolverCache122.set(cacheKey, {
-                  slug: match.slug,
-                  title: match.title || "",
-                  score: matchInfo.score,
-                  matchType: matchInfo.matchType || termEntry.origin || "local",
-                  timestamp: Date.now()
-                });
-                return streams;
-              }
-              console.warn(`[AnimeAV1] El candidato "${match.title}" no produjo streams reproducibles; se probará otra alternativa`);
-              return [];
-            });
-          }).catch(function (e) {
-            console.warn(`[AnimeAV1] Error probando slug "${match.slug}": ${e.message}`);
-            return [];
-          });
-        }).catch(function (e) {
-          console.warn(`[AnimeAV1] Búsqueda local "${term}" falló: ${e.message}`);
-          return null;
+  console.log(`[AnimeAV1] Fallback local 1.1.2: TMDB ${tmdbId} (${type}) S${season != null ? season : "-"}E${episode != null ? episode : "-"}`);
+  var seasonNum = type === "movie" ? 1 : season ? Number(season) : 1;
+  return Promise.all([getTMDBInfo(tmdbId, type), type === "movie" ? Promise.resolve(undefined) : getSeasonYear(tmdbId, seasonNum)]).then(function (pair) {
+    var info = pair[0], tmdbSeasonYear = pair[1];
+    if (!info) return [];
+    if (!looksLikeAnime(info)) return [];
+    var seasonYear = type === "movie" ? info.year : tmdbSeasonYear;
+    var searchTerm = seasonNum !== 1 ? `${info.title} ${seasonNum}` : info.title;
+    var initialAniListPromise = seasonYear === undefined && type !== "movie" ? getAniListInfo(info.title, seasonNum) : Promise.resolve(undefined);
+    return initialAniListPromise.then(function (aniListInfo) {
+      if (aniListInfo) { seasonYear = aniListInfo.year; searchTerm = aniListInfo.romajiTitle; }
+      console.log(`[AnimeAV1] searchTerm="${searchTerm}" year=${seasonYear != null ? seasonYear : "ninguno"}`);
+      return searchAnimeAV1(searchTerm, seasonYear).then(function (candidates) {
+        var matchInfo = pickBestMatch110(candidates, searchTerm, seasonNum);
+        var retry = !matchInfo || !matchInfo.accepted;
+        var retryPromise = retry && type !== "movie" ? getAniListInfo(info.title, seasonNum) : Promise.resolve(undefined);
+        return retryPromise.then(function (retryInfo) {
+          if (retryInfo && (retryInfo.romajiTitle !== searchTerm || retryInfo.year !== seasonYear)) {
+            var retryTerm = retryInfo.romajiTitle, retryYear = retryInfo.year || seasonYear;
+            return searchAnimeAV1(retryTerm, retryYear).then(function (retryCandidates) {
+              var retryMatch = pickBestMatch110(retryCandidates, retryTerm, seasonNum);
+              if (retryMatch && (retryMatch.accepted || !matchInfo || !matchInfo.accepted)) { matchInfo = retryMatch; seasonYear = retryYear; searchTerm = retryTerm; }
+              return { matchInfo: matchInfo };
+            }).catch(function (e) { console.warn(`[AnimeAV1] Segunda búsqueda AniList falló: ${e.message}`); return { matchInfo: matchInfo }; });
+          }
+          return { matchInfo: matchInfo };
         });
-      };
-
-      return attempt(searchYear, searchYear !== undefined && searchYear !== null).then(function (streams) {
-        if (streams && streams.length) return streams;
-        if (searchYear !== undefined && searchYear !== null) {
-          return attempt(undefined, false).then(function (unfilteredStreams) {
-            if (unfilteredStreams && unfilteredStreams.length) return unfilteredStreams;
-            return tryCatalogTerms122(terms, termIndex + 1, searchYear, originLabel);
-          });
+      }).then(function (state) {
+        if (!state.matchInfo || !state.matchInfo.accepted) {
+          console.warn(`[AnimeAV1] No hay una coincidencia suficientemente segura para "${searchTerm}"; no se usará el primer resultado`);
+          return [];
         }
-        return tryCatalogTerms122(terms, termIndex + 1, searchYear, originLabel);
-      });
-    };
-
-    console.log(`[AnimeAV1] Resolución local por TMDB: títulos=${directTerms.join(" | ")} año=${seasonYear || "ninguno"}`);
-    return tryCatalogTerms122(directTerms, 0, seasonYear, "TMDB").then(function (directStreams) {
-      if (directStreams && directStreams.length) return directStreams;
-
-      console.warn(`[AnimeAV1] Búsqueda directa sin streams; se activa cruce AniList/sinónimos`);
-      return resolveAniListIdentity122(info, seasonNum, seasonYear, [seasonInfo.name].concat(tmdbAltTitles)).then(function (aliInfo) {
-        if (!aliInfo) {
-          // Segunda oportunidad conservadora: la estrategia AniList histórica del plugin.
-          return getAniListInfo(info.title, seasonNum).then(function (legacyInfo) {
-            if (!legacyInfo) return [];
-            var legacyTerms = uniqueTitles122([legacyInfo.romajiTitle, legacyInfo.englishTitle].concat(legacyInfo.synonyms || []), 8)
-              .map(function (term) { return { term: term, origin: "AniList histórico" }; });
-            return tryCatalogTerms122(legacyTerms, 0, legacyInfo.year || seasonYear, "AniList histórico");
+        var match = state.matchInfo.candidate;
+        console.log(`[AnimeAV1] Match elegido: "${match.title}" (${match.slug}) score=${state.matchInfo.score.toFixed(1)}`);
+        var epNumber = type === "movie" ? 1 : episode !== undefined ? Number(episode) : 1;
+        return getEpisodeServers(match.slug, epNumber).then(function (servers) {
+          if (!servers.length && type === "movie" && epNumber === 1) return getEpisodeServers(match.slug, 0);
+          return servers;
+        }).then(function (servers) {
+          if (!servers.length) return [];
+          var sourceOrder = Object.keys(SOURCE_EXTRACTORS);
+          servers = servers.filter(function (server) { return sourceOrder.some(function (key) { return server.name.indexOf(key) !== -1; }); });
+          servers.sort(function (a, b) {
+            var ai = sourceOrder.findIndex(function (key) { return a.name.indexOf(key) !== -1; });
+            var bi = sourceOrder.findIndex(function (key) { return b.name.indexOf(key) !== -1; });
+            if (ai !== bi) return ai - bi;
+            return (a.dub ? 1 : 0) - (b.dub ? 1 : 0);
           });
-        }
-
-        var aliasTerms = uniqueTitles122([
-          aliInfo.romajiTitle,
-          aliInfo.englishTitle,
-          aliInfo.nativeTitle,
-          seasonInfo.name,
-          info.title,
-          info.originalTitle
-        ].concat(aliInfo.synonyms || [], tmdbAltTitles), 12).map(function (term) {
-          return { term: term, origin: (aliInfo.synonyms || []).some(function (s) { return normalizeTitle110(s) === normalizeTitle110(term); }) ? "sinónimo AniList" : "AniList/TMDB" };
+          return Promise.all(servers.map(function (server) {
+            var sourceKey = Object.keys(SOURCE_EXTRACTORS).find(function (key) { return server.name.indexOf(key) !== -1; });
+            var source = sourceKey ? SOURCE_EXTRACTORS[sourceKey] : null;
+            if (!source) return null;
+            return source.extract(server.url).then(function (resolved) {
+              var variants = Array.isArray(resolved) ? resolved : [resolved];
+              return variants.map(function (variant) {
+                return { name: "AnimeAV1", title: "", url: variant.url, quality: `📺 ${sourceKey === "Voe" ? "Voe 720p" : source.label}\n${sourceKey === "Voe" ? "720p" : "1080p"} | WEB-DL | Anime\n${getLangLabel(server.dub)}`, headers: variant.headers, type: "hls" };
+              });
+            }).catch(function (e) { console.warn(`[${source.label}] Falló resolviendo un servidor: ${e.message}`); return null; });
+          })).then(function (results) {
+            var final = results.filter(Boolean).reduce(function (all, item) { return all.concat(item); }, []);
+            var seen = new Set(), unique = final.filter(function (stream) { var key = `${stream.url}|${stream.quality}`; if (seen.has(key)) return false; seen.add(key); return true; });
+            console.log(`[AnimeAV1] ✓ ${unique.length} streams devueltos`);
+            return unique;
+          });
         });
-        if (!aliasTerms.length) return [];
-        console.log(`[AnimeAV1] Segunda fase local: AniList ${aliInfo.matchType}, year=${aliInfo.year || seasonYear || "ninguno"}; títulos=${aliasTerms.map(function (entry) { return entry.term; }).join(" | ")}`);
-        return tryCatalogTerms122(aliasTerms, 0, aliInfo.year || seasonYear, "AniList/TMDB");
       });
-    }).then(function (streams) {
-      if (!streams || !streams.length) console.warn(`[AnimeAV1] Resolver local 1.2.4 no pudo obtener streams para TMDB ${tmdbId} S${seasonNum}E${epNumber}`);
-      else console.log(`[AnimeAV1] ✓ Resolver local 1.2.4 devolvió ${streams.length} streams`);
-      return streams || [];
     });
-  }).catch(function (e) {
-    console.error(`[AnimeAV1] Error del resolver local 1.2.4: ${e.message}`);
-    return [];
-  });
-}
+  }).catch(function (e) { console.error(`[AnimeAV1] Error 1.1.2: ${e.message}`); return []; });
+};

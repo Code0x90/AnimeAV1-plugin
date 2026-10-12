@@ -1,12 +1,12 @@
 {
   "name": "AnimeAV1",
-  "version": "1.2.4",
+  "version": "1.2.6",
   "scrapers": [
     {
       "id": "AnimeAV1",
       "name": "AnimeAV1",
-      "description": "Streams de anime (SUB/DUB) desde AnimeAV1; resolver remoto principal con fallback local TMDB/AniList.",
-      "version": "1.2.4",
+      "description": "Streams de anime (SUB/DUB) desde AnimeAV1 vía HLS y Voe HLS.",
+      "version": "1.2.6",
       "author": "-",
       "supportedTypes": [
         "movie",
