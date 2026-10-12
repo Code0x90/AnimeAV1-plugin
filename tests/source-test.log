@@ -1,0 +1,35 @@
+[AnimeAV1] 1.2.5 Resolviendo: TMDB 910850 (movie) S1E1
+[AnimeAV1] Resolver remoto: https://animeav1-resolver.onrender.com/resolve?tmdbId=910850&type=movie&season=1
+[AnimeAV1] Resolver remoto encontró "Kidou Senshi Gundam: Senkou no Hathaway - Circe no Majo" slug=kidou-senshi-gundam-senkou-no-hathaway-circe-no-majo score=50 tipo=tmdb-alternative
+[AnimeAV1] GetEpisodeServers: https://animeav1.com/media/kidou-senshi-gundam-senkou-no-hathaway-circe-no-majo/0
+[AnimeAV1] Servidor detectado: HLS (SUB)
+[AnimeAV1] __data.json OK: 1 servidores soportados
+[HLS-zilla] URL construida: https://player.zilla-networks.com/m3u8/gundam-test
+[AnimeAV1] Episodio elegido kidou-senshi-gundam-senkou-no-hathaway-circe-no-majo/E0: 1 URL(s) HLS válidas
+[AnimeAV1] ✓ Resolver remoto confirmó slug "kidou-senshi-gundam-senkou-no-hathaway-circe-no-majo" y entregó 1 streams
+MOVIE_EPISODE_ZERO_FIRST=PASS
+[AnimeAV1] 1.2.5 Resolviendo: TMDB 999999 (movie) S1E1
+[AnimeAV1] Resolver remoto: https://animeav1-resolver.onrender.com/resolve?tmdbId=999999&type=movie&season=1
+[AnimeAV1] Resolver remoto encontró "Test movie" slug=test-movie score=50 tipo=tmdb-alternative
+[AnimeAV1] GetEpisodeServers: https://animeav1.com/media/test-movie/0
+[AnimeAV1] Servidor detectado: HLS (SUB)
+[AnimeAV1] __data.json OK: 1 servidores soportados
+[HLS] Falló resolviendo un servidor: URL de HLS sin identificador de reproducción
+[AnimeAV1] test-movie/E0 detectó servidores pero no produjo URLs HLS utilizables; probando alternativa
+[AnimeAV1] GetEpisodeServers: https://animeav1.com/media/test-movie/1
+[AnimeAV1] Servidor detectado: HLS (SUB)
+[AnimeAV1] __data.json OK: 1 servidores soportados
+[HLS-zilla] URL construida: https://player.zilla-networks.com/m3u8/working-id
+[AnimeAV1] Episodio elegido test-movie/E1: 1 URL(s) HLS válidas
+[AnimeAV1] ✓ Resolver remoto confirmó slug "test-movie" y entregó 1 streams
+EMPTY_MOVIE_EPISODE_ZERO_FALLBACK_TO_ONE=PASS
+[AnimeAV1] 1.2.5 Resolviendo: TMDB 123456 (tv) S1E1
+[AnimeAV1] Resolver remoto: https://animeav1-resolver.onrender.com/resolve?tmdbId=123456&type=tv&season=1
+[AnimeAV1] Resolver remoto encontró "Test TV" slug=test-tv score=90 tipo=remote
+[AnimeAV1] GetEpisodeServers: https://animeav1.com/media/test-tv/1
+[AnimeAV1] Servidor detectado: HLS (SUB)
+[AnimeAV1] __data.json OK: 1 servidores soportados
+[HLS-zilla] URL construida: https://player.zilla-networks.com/m3u8/tv-episode-1
+[AnimeAV1] Episodio elegido test-tv/E1: 1 URL(s) HLS válidas
+[AnimeAV1] ✓ Resolver remoto confirmó slug "test-tv" y entregó 1 streams
+TV_EPISODE_ROUTE_UNCHANGED=PASS

@@ -59,7 +59,8 @@ async function getTMDBInfo(tmdbId, type) {
   const genreIds = (data.genres || []).map((g) => g.id)
   const isAnimation = genreIds.includes(16)
 
-  return { title, year, originCountries, isAnimation }
+  const originalTitle = data.original_title || data.original_name || title
+  return { title, originalTitle, year, originCountries, isAnimation }
 }
 
 // Países de origen asociados a anime/animación asiática en TMDB. Se usa para
@@ -666,8 +667,26 @@ async function getEpisodeServers(slug, epNumber) {
  * Sec-Fetch-Site/Mode/Dest, que Cloudflare exige en cada segmento del manifest
  * para no responder 403 (con solo Referer + User-Agent los segmentos fallaban).
  */
+function isUsableHttpStreamUrlLocal(value) {
+  if (typeof value !== 'string') return false
+  const candidate = value.trim()
+  if (!/^https?:\/\//i.test(candidate)) return false
+  try {
+    const parsed = new URL(candidate)
+    if (!parsed.hostname || parsed.hostname === 'localhost') return false
+    // Zilla sin el identificador del manifiesto produce una URL sintácticamente
+    // válida, pero vacía: https://player.zilla-networks.com/m3u8/.
+    if (/\/m3u8\/?$/i.test(parsed.pathname)) return false
+    return true
+  } catch (_) {
+    return false
+  }
+}
+
 async function extractZillaHLS(playUrl) {
+  if (!isUsableHttpStreamUrlLocal(playUrl)) throw Error('URL de HLS vacía o inválida')
   const directUrl = playUrl.replace('/play/', '/m3u8/')
+  if (!isUsableHttpStreamUrlLocal(directUrl)) throw Error('URL de HLS sin identificador de reproducción')
   console.log(`[HLS-zilla] URL construida: ${directUrl}`)
   return {
     url: directUrl,
@@ -798,11 +817,12 @@ async function extractVoe(embedUrl) {
     "Sec-Fetch-Dest": "empty",
     "User-Agent": UA
   }
-  if (!decoded.source) throw Error("El payload de Voe no trajo source HLS")
+  const sourceUrl = typeof decoded.source === 'string' ? decoded.source.trim() : ''
+  if (!isUsableHttpStreamUrlLocal(sourceUrl)) throw Error("El payload de Voe no trajo una URL HLS válida")
 
-  console.log(`[Voe] HLS extraído: ${decoded.source}`)
+  console.log(`[Voe] HLS extraído: ${sourceUrl}`)
   return {
-    url: decoded.source,
+    url: sourceUrl,
     headers: hlsHeaders,
     type: "hls"
   }
@@ -831,7 +851,7 @@ const getLangLabel = (dub) => dub ? "🇲🇽 LATINO" : "🇯🇵 JAPONÉS · �
  * @param {string|number} [episode]
  * @returns {Promise<Array>}
  */
-exports.getStreams = async function (tmdbId, type, season, episode) {
+async function resolveAnimeAV1LocalLegacy(tmdbId, type, season, episode) {
   if (!tmdbId || !type) return []
   console.log(`[AnimeAV1] Buscando: TMDB ${tmdbId} (${type}) S${season ?? '-'}E${episode ?? '-'}`)
 
@@ -968,6 +988,464 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
     return unique
   } catch (e) {
     console.error(`[AnimeAV1] Error: ${e.message}`)
+    return []
+  }
+}
+
+
+// ─────────────────────────────────────────────
+// Resolver remoto principal + resolución local completa de respaldo (1.2.5)
+// ─────────────────────────────────────────────
+
+const ANIMEAV1_RESOLVER_URL = "https://animeav1-resolver.onrender.com"
+const RESOLVER_CACHE_TTL_MS = 24 * 60 * 60 * 1000
+const LOCAL_RESOLVER_CACHE_TTL_MS = 24 * 60 * 60 * 1000
+const animeAV1RemoteCache = new Map()
+const animeAV1LocalCache = new Map()
+
+function resolverCacheKey(tmdbId, type, seasonNum) {
+  return `${tmdbId}|${type}|${seasonNum}`
+}
+
+async function getRemoteAnimeIdentity(tmdbId, type, seasonNum) {
+  const key = resolverCacheKey(tmdbId, type, seasonNum)
+  const cached = animeAV1RemoteCache.get(key)
+  if (cached && Date.now() - cached.timestamp < RESOLVER_CACHE_TTL_MS) {
+    console.log(`[AnimeAV1] Caché del resolver remoto: ${cached.slug}`)
+    return cached
+  }
+  if (cached) animeAV1RemoteCache.delete(key)
+
+  const url = `${ANIMEAV1_RESOLVER_URL}/resolve?tmdbId=${encodeURIComponent(tmdbId)}&type=${encodeURIComponent(type)}&season=${encodeURIComponent(seasonNum)}`
+  console.log(`[AnimeAV1] Resolver remoto: ${url}`)
+  const response = await fetch(url)
+  if (!response.ok) throw Error(`Resolver remoto HTTP ${response.status}`)
+  const data = await response.json()
+  if (!data || data.success !== true || typeof data.slug !== 'string' || !data.slug.trim()) {
+    throw Error(data?.error || 'El resolver remoto no devolvió un slug válido')
+  }
+
+  const identity = {
+    slug: data.slug.trim(),
+    title: data.animeav1Title || '',
+    score: typeof data.score === 'number' ? data.score : undefined,
+    matchType: data.matchType || 'remote',
+    timestamp: Date.now()
+  }
+  animeAV1RemoteCache.set(key, identity)
+  console.log(`[AnimeAV1] Resolver remoto encontró "${identity.title || identity.slug}" slug=${identity.slug} score=${identity.score ?? '?'} tipo=${identity.matchType}`)
+  return identity
+}
+
+async function getTMDBSeasonInfoLocal(tmdbId, seasonNum) {
+  try {
+    const url = `https://api.themoviedb.org/3/tv/${tmdbId}/season/${seasonNum}?api_key=${TMDB_API_KEY}&language=en-US`
+    const response = await fetch(url, { headers: { 'User-Agent': UA } })
+    if (!response.ok) throw Error(`HTTP ${response.status}`)
+    const data = await response.json()
+    const airDate = data?.air_date || ''
+    return {
+      year: airDate ? new Date(airDate).getFullYear() : undefined,
+      name: data?.name || data?.original_name || '',
+      airDate
+    }
+  } catch (e) {
+    console.warn(`[TMDB] Datos de temporada no disponibles para S${seasonNum}: ${e.message}`)
+    return { year: undefined, name: '', airDate: '' }
+  }
+}
+
+async function getTMDBAlternativeTitlesLocal(tmdbId, type) {
+  try {
+    const path = type === 'movie' ? 'movie' : 'tv'
+    const url = `https://api.themoviedb.org/3/${path}/${tmdbId}/alternative_titles?api_key=${TMDB_API_KEY}`
+    const response = await fetch(url, { headers: { 'User-Agent': UA } })
+    if (!response.ok) throw Error(`HTTP ${response.status}`)
+    const data = await response.json()
+    const rows = type === 'movie' ? data?.titles : data?.results
+    if (!Array.isArray(rows)) return []
+    const countries = new Set(['US', 'JP', 'KR', 'CN', 'TW', 'HK'])
+    return uniqueLocalTitles(rows
+      .filter((row) => row && typeof row.title === 'string' && row.title.trim().length >= 3 && (!row.iso_3166_1 || countries.has(row.iso_3166_1)))
+      .map((row) => row.title), 8)
+  } catch (e) {
+    console.warn(`[TMDB] Títulos alternativos no disponibles: ${e.message}`)
+    return []
+  }
+}
+
+function uniqueLocalTitles(values, maxCount = 20) {
+  const result = []
+  const seen = new Set()
+  for (const value of values || []) {
+    const raw = String(value || '').trim()
+    const key = normalizeTitle(raw)
+    if (!key || key.length < 3 || seen.has(key)) continue
+    if (/^(?:season\s*\d+|\d+(?:st|nd|rd|th)?\s+season|part\s*\d+)$/.test(key)) continue
+    seen.add(key)
+    result.push(raw)
+    if (result.length >= maxCount) break
+  }
+  return result
+}
+
+async function fetchAniListCandidatesLocal(title) {
+  const query = `query ($search: String) {
+    Page(page: 1, perPage: 25) {
+      media(search: $search, type: ANIME, sort: SEARCH_MATCH) {
+        id
+        title { romaji english native }
+        synonyms
+        seasonYear
+        startDate { year month day }
+        format
+      }
+    }
+  }`
+  const response = await fetch('https://graphql.anilist.co', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    body: JSON.stringify({ query, variables: { search: title } })
+  })
+  if (!response.ok) throw Error(`AniList HTTP ${response.status}`)
+  const json = await response.json()
+  const rows = json?.data?.Page?.media
+  return Array.isArray(rows) ? rows : []
+}
+
+function scoreAniListCandidateLocal(media, sourceTitles, targetYear) {
+  const title = media?.title || {}
+  const named = [
+    { value: title.romaji || '', synonym: false },
+    { value: title.english || '', synonym: false },
+    { value: title.native || '', synonym: false },
+    ...(Array.isArray(media?.synonyms) ? media.synonyms.map((value) => ({ value: value || '', synonym: true })) : [])
+  ]
+  let titleScore = 0
+  let matchType = 'title-similarity'
+  for (const sourceTitle of sourceTitles) {
+    const target = normalizeTitle(sourceTitle)
+    if (!target) continue
+    for (const name of named) {
+      const candidate = normalizeTitle(name.value)
+      if (!candidate) continue
+      let score = 0
+      if (candidate === target) score = name.synonym ? 130 : 120
+      else if (target.length >= 5 && candidate.length >= 5 && (candidate.includes(target) || target.includes(candidate))) {
+        score = 82 + (Math.min(target.length, candidate.length) / Math.max(target.length, candidate.length)) * 12
+      } else {
+        const targetTokens = new Set(titleTokens(sourceTitle))
+        const candidateTokens = new Set(titleTokens(name.value))
+        if (!targetTokens.size || !candidateTokens.size) continue
+        let overlap = 0
+        targetTokens.forEach((token) => { if (candidateTokens.has(token)) overlap++ })
+        const coverage = overlap / targetTokens.size
+        const precision = overlap / candidateTokens.size
+        const symmetric = overlap ? 2 * overlap / (targetTokens.size + candidateTokens.size) : 0
+        score = Math.max(coverage * 58 + precision * 12, symmetric * 78)
+      }
+      if (score > titleScore) {
+        titleScore = score
+        matchType = name.synonym && score >= 120 ? 'anilist-synonym' : (score >= 120 ? 'anilist-title' : 'title-similarity')
+      }
+    }
+  }
+  const year = Number(media?.seasonYear || media?.startDate?.year) || undefined
+  let yearBonus = 0
+  if (targetYear && year) {
+    const diff = Math.abs(year - targetYear)
+    if (diff === 0) yearBonus = 26
+    else if (diff === 1) yearBonus = 12
+    else if (diff === 2) yearBonus = 3
+    else yearBonus = -Math.min(30, (diff - 2) * 5)
+  }
+  return { media, year, titleScore, score: titleScore + yearBonus, matchType }
+}
+
+async function resolveAniListIdentityLocal(info, seasonNum, targetYear, extraTitles) {
+  const sourceTitles = uniqueLocalTitles([info?.title, info?.originalTitle, ...(extraTitles || [])], 12)
+  const queries = uniqueLocalTitles([info?.title, info?.originalTitle, ...(extraTitles || [])], 3)
+  if (!queries.length) return undefined
+  const all = []
+  for (const query of queries) {
+    try {
+      const rows = await fetchAniListCandidatesLocal(query)
+      for (const row of rows) if (row?.id != null && !all.some((item) => item.id === row.id)) all.push(row)
+    } catch (e) {
+      console.warn(`[AniList] Búsqueda local "${query}" falló: ${e.message}`)
+    }
+  }
+  if (!all.length) return undefined
+
+  const scored = all.map((media) => scoreAniListCandidateLocal(media, sourceTitles, targetYear)).sort((a, b) => b.score - a.score)
+  const best = scored[0]
+  if (!best || best.titleScore < 52) {
+    console.warn(`[AniList] Ningún título alternativo alcanza confianza suficiente para "${info.title}"`)
+    return undefined
+  }
+
+  // Si AniList devuelve varias entregas de la misma franquicia, seleccionamos
+  // la que mejor corresponda al año de la temporada solicitada.
+  const bestRomaji = best.media?.title?.romaji || ''
+  const base = normalizeTitle(anilistBaseTitle(bestRomaji))
+  const related = scored.filter((entry) => {
+    const romaji = entry.media?.title?.romaji || ''
+    return base && normalizeTitle(anilistBaseTitle(romaji)) === base
+  })
+  let selected = best
+  if (related.length > 1 && targetYear) {
+    related.sort((a, b) => {
+      const da = a.year ? Math.abs(a.year - targetYear) : 9999
+      const db = b.year ? Math.abs(b.year - targetYear) : 9999
+      if (da !== db) return da - db
+      return b.titleScore - a.titleScore
+    })
+    selected = related[0]
+  } else if (related.length > 1 && seasonNum > 1) {
+    related.sort((a, b) => {
+      const da = a.media?.startDate || {}, db = b.media?.startDate || {}
+      const ak = `${da.year || a.year || 9999}-${String(da.month || 1).padStart(2, '0')}-${String(da.day || 1).padStart(2, '0')}`
+      const bk = `${db.year || b.year || 9999}-${String(db.month || 1).padStart(2, '0')}-${String(db.day || 1).padStart(2, '0')}`
+      return ak.localeCompare(bk)
+    })
+    if (related.length >= seasonNum) selected = related[seasonNum - 1]
+  }
+  const media = selected.media
+  const title = media?.title || {}
+  console.log(`[AniList] Resolver local: "${title.romaji || title.english || '?'}" year=${selected.year || targetYear || '?'} score=${selected.score.toFixed(1)} match=${selected.matchType}`)
+  return {
+    year: selected.year || targetYear,
+    romajiTitle: title.romaji || '',
+    englishTitle: title.english || '',
+    nativeTitle: title.native || '',
+    synonyms: Array.isArray(media?.synonyms) ? media.synonyms : [],
+    matchType: selected.matchType,
+    score: selected.score
+  }
+}
+
+async function extractAnimeAV1StreamsLocal(servers) {
+  const sourceOrder = Object.keys(SOURCE_EXTRACTORS)
+  const supported = servers.filter((server) => sourceOrder.some((key) => server.name.includes(key)))
+  supported.sort((a, b) => {
+    const ai = sourceOrder.findIndex((key) => a.name.includes(key))
+    const bi = sourceOrder.findIndex((key) => b.name.includes(key))
+    if (ai !== bi) return ai - bi
+    return (a.dub ? 1 : 0) - (b.dub ? 1 : 0)
+  })
+  const groups = await Promise.all(supported.map(async (server) => {
+    const sourceKey = Object.keys(SOURCE_EXTRACTORS).find((key) => server.name.includes(key))
+    const source = sourceKey ? SOURCE_EXTRACTORS[sourceKey] : null
+    if (!source) return []
+    try {
+      const resolved = await source.extract(server.url)
+      const variants = Array.isArray(resolved) ? resolved : [resolved]
+      return variants.filter((variant) => isUsableHttpStreamUrlLocal(variant?.url)).map((variant) => ({
+        name: 'AnimeAV1',
+        title: '',
+        url: variant.url.trim(),
+        quality: `📺 ${sourceKey === 'Voe' ? 'Voe 720p' : source.label}\n${sourceKey === 'Voe' ? '720p' : '1080p'} | WEB-DL | Anime\n${getLangLabel(server.dub)}`,
+        headers: variant.headers,
+        ...(variant.type ? { type: variant.type } : {})
+      }))
+    } catch (e) {
+      console.warn(`[${source.label}] Falló resolviendo un servidor: ${e.message}`)
+      return []
+    }
+  }))
+  const all = groups.flat()
+  const seen = new Set()
+  return all.filter((stream) => {
+    const key = `${stream.url}|${stream.quality}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+async function fetchStreamsForSlugLocal(slug, type, epNumber) {
+  // AnimeAV1 etiqueta algunas películas como Episodio 0 (confirmado en la
+  // ficha de Circe no Majo). Para películas probamos 0 primero y solo usamos
+  // 1 si el episodio 0 no contiene servidores ni produce URLs HLS utilizables.
+  const episodeCandidates = type === 'movie'
+    ? [...new Set([0, epNumber])]
+    : [epNumber]
+
+  for (const candidateEp of episodeCandidates) {
+    let servers = []
+    try {
+      servers = await getEpisodeServers(slug, candidateEp)
+    } catch (e) {
+      console.warn(`[AnimeAV1] No se pudieron leer servidores de ${slug}/E${candidateEp}: ${e.message}`)
+    }
+    if (!servers.length) {
+      console.warn(`[AnimeAV1] ${slug}/E${candidateEp} no contiene servidores soportados; probando alternativa`)
+      continue
+    }
+
+    const streams = await extractAnimeAV1StreamsLocal(servers).catch((e) => {
+      console.warn(`[AnimeAV1] Falló la extracción de ${slug}/E${candidateEp}: ${e.message}`)
+      return []
+    })
+    const usableStreams = (streams || []).filter((stream) => isUsableHttpStreamUrlLocal(stream?.url))
+    if (usableStreams.length) {
+      console.log(`[AnimeAV1] Episodio elegido ${slug}/E${candidateEp}: ${usableStreams.length} URL(s) HLS válidas`)
+      return usableStreams
+    }
+    console.warn(`[AnimeAV1] ${slug}/E${candidateEp} detectó servidores pero no produjo URLs HLS utilizables; probando alternativa`)
+  }
+  return []
+}
+
+async function resolveAnimeAV1LocalFresh(tmdbId, type, seasonNum, epNumber, cacheKey) {
+  console.log(`[AnimeAV1] Fallback local 1.2.5: TMDB ${tmdbId} (${type}) S${seasonNum}E${epNumber}`)
+  const seasonPromise = type === 'movie'
+    ? Promise.resolve({ year: undefined, name: '', airDate: '' })
+    : getTMDBSeasonInfoLocal(tmdbId, seasonNum)
+  const [info, seasonInfo, altTitles] = await Promise.all([
+    getTMDBInfo(tmdbId, type), seasonPromise, getTMDBAlternativeTitlesLocal(tmdbId, type)
+  ])
+  if (!info) {
+    console.warn(`[AnimeAV1] TMDB no devolvió información para ${tmdbId}`)
+    return []
+  }
+  if (!looksLikeAnime(info)) {
+    console.warn(`[AnimeAV1] Contenido descartado por filtro de anime: "${info.title}"`)
+    return []
+  }
+  const seasonYear = type === 'movie' ? info.year : (seasonInfo.year || info.year)
+  const directTerms = uniqueLocalTitles([
+    seasonNum > 1 && type !== 'movie' ? `${info.title} ${seasonNum}` : info.title,
+    info.title, info.originalTitle, seasonInfo.name, ...(altTitles || [])
+  ], 12)
+  const triedTerms = new Set()
+  const triedSlugs = new Set()
+
+  const tryTerms = async (terms, yearToUse, origin) => {
+    for (const termValue of terms) {
+      const term = typeof termValue === 'string' ? termValue : termValue.term
+      const termOrigin = typeof termValue === 'string' ? origin : (termValue.origin || origin)
+      const normalized = normalizeTitle(term)
+      if (!normalized || triedTerms.has(`${normalized}|${yearToUse || ''}`)) continue
+      triedTerms.add(`${normalized}|${yearToUse || ''}`)
+      const yearsToTry = yearToUse ? [yearToUse, undefined] : [undefined]
+      for (const year of yearsToTry) {
+        let candidates
+        try {
+          candidates = await searchAnimeAV1(term, year, seasonNum)
+        } catch (e) {
+          console.warn(`[AnimeAV1] Búsqueda local "${term}" falló: ${e.message}`)
+          continue
+        }
+        const matchInfo = pickBestMatch(candidates, term, seasonNum)
+        if (!matchInfo) continue
+        // En temporadas posteriores, un título fuerte dentro de una búsqueda
+        // filtrada por el año de TMDB también es evidencia válida aunque el
+        // catálogo no escriba literalmente “Season N” en el título.
+        if (!matchInfo.accepted && year && seasonNum > 1 && matchInfo.candidateSeason === undefined && matchInfo.score >= 85) {
+          matchInfo.accepted = true
+          console.log(`[AnimeAV1] Coincidencia aceptada por título + año TMDB: "${matchInfo.candidate.title}" score=${matchInfo.score.toFixed(1)}`)
+        }
+        const match = matchInfo.candidate
+        if (!matchInfo.accepted || !match?.slug || triedSlugs.has(match.slug)) continue
+        triedSlugs.add(match.slug)
+        console.log(`[AnimeAV1] Match local (${termOrigin}): "${match.title}" slug=${match.slug} score=${matchInfo.score.toFixed(1)} term="${term}"`)
+        const streams = await fetchStreamsForSlugLocal(match.slug, type, epNumber).catch((e) => {
+          console.warn(`[AnimeAV1] Error probando slug "${match.slug}": ${e.message}`)
+          return []
+        })
+        if (streams.length) {
+          animeAV1LocalCache.set(cacheKey, { slug: match.slug, title: match.title, score: matchInfo.score, timestamp: Date.now() })
+          console.log(`[AnimeAV1] ✓ Resolver local encontró ${streams.length} streams`)
+          return streams
+        }
+        console.warn(`[AnimeAV1] El candidato "${match.title}" no produjo streams; se probará otra alternativa`)
+      }
+    }
+    return []
+  }
+
+  console.log(`[AnimeAV1] Resolución local por TMDB: títulos=${directTerms.join(' | ')} año=${seasonYear || 'ninguno'}`)
+  let streams = await tryTerms(directTerms, seasonYear, 'TMDB')
+  if (streams.length) return streams
+
+  console.warn('[AnimeAV1] Búsqueda directa sin streams; se activa cruce AniList/sinónimos')
+  const aliInfo = await resolveAniListIdentityLocal(info, seasonNum, seasonYear, [seasonInfo.name, ...(altTitles || [])])
+  if (!aliInfo) {
+    // Conserva la ruta AniList histórica como última alternativa cuando no se
+    // puede obtener una identidad con títulos y sinónimos estructurados.
+    const legacyInfo = await getAniListInfo(info.title, seasonNum)
+    if (!legacyInfo) return []
+    const legacyTerms = uniqueLocalTitles([legacyInfo.romajiTitle, info.title, info.originalTitle, ...(altTitles || [])], 8)
+    streams = await tryTerms(legacyTerms, legacyInfo.year || seasonYear, 'AniList histórico')
+    if (streams.length) return streams
+    return []
+  }
+
+  const synonymSet = new Set((aliInfo.synonyms || []).map(normalizeTitle))
+  const aliasTerms = uniqueLocalTitles([
+    aliInfo.romajiTitle, aliInfo.englishTitle, aliInfo.nativeTitle,
+    seasonInfo.name, info.title, info.originalTitle,
+    ...(aliInfo.synonyms || []), ...(altTitles || [])
+  ], 24).map((term) => ({ term, origin: synonymSet.has(normalizeTitle(term)) ? 'sinónimo AniList' : 'AniList/TMDB' }))
+  console.log(`[AnimeAV1] Segunda fase local: AniList ${aliInfo.matchType}; año=${aliInfo.year || seasonYear || 'ninguno'}; títulos=${aliasTerms.map((item) => item.term).join(' | ')}`)
+  streams = await tryTerms(aliasTerms, aliInfo.year || seasonYear, 'AniList/TMDB')
+  if (!streams.length) console.warn(`[AnimeAV1] Resolver local no pudo obtener streams para TMDB ${tmdbId} S${seasonNum}E${epNumber}`)
+  return streams
+}
+
+async function resolveAnimeAV1Local(tmdbId, type, season, episode) {
+  if (!tmdbId || !type) return []
+  const seasonNum = type === 'movie' ? 1 : (season ? Number(season) : 1)
+  const epNumber = type === 'movie' ? 1 : (episode !== undefined ? Number(episode) : 1)
+  const key = resolverCacheKey(tmdbId, type, seasonNum)
+  const cached = animeAV1LocalCache.get(key)
+  if (cached && Date.now() - cached.timestamp < LOCAL_RESOLVER_CACHE_TTL_MS) {
+    console.log(`[AnimeAV1] Caché del resolver local: TMDB ${tmdbId} S${seasonNum} -> ${cached.slug}`)
+    const streams = await fetchStreamsForSlugLocal(cached.slug, type, epNumber).catch(() => [])
+    if (streams.length) return streams
+    animeAV1LocalCache.delete(key)
+    console.warn('[AnimeAV1] Caché local sin streams; se vuelve a resolver')
+  } else if (cached) animeAV1LocalCache.delete(key)
+
+  try {
+    return await resolveAnimeAV1LocalFresh(tmdbId, type, seasonNum, epNumber, key)
+  } catch (e) {
+    console.error(`[AnimeAV1] Error del fallback local: ${e.message}`)
+    // Ultima oportunidad: el método local previo, conservado sin tocar sus
+    // extractores, ayuda a evitar regresiones en casos ya soportados.
+    try { return await resolveAnimeAV1LocalLegacy(tmdbId, type, seasonNum, epNumber) } catch (legacyError) {
+      console.error(`[AnimeAV1] Método local heredado falló: ${legacyError.message}`)
+      return []
+    }
+  }
+}
+
+exports.getStreams = async function (tmdbId, type, season, episode) {
+  if (!tmdbId || !type) return []
+  const seasonNum = type === 'movie' ? 1 : (season ? Number(season) : 1)
+  const epNumber = type === 'movie' ? 1 : (episode !== undefined ? Number(episode) : 1)
+  console.log(`[AnimeAV1] 1.2.5 Resolviendo: TMDB ${tmdbId} (${type}) S${seasonNum}E${epNumber}`)
+
+  try {
+    const identity = await getRemoteAnimeIdentity(tmdbId, type, seasonNum)
+    let streams = await fetchStreamsForSlugLocal(identity.slug, type, epNumber)
+    if (streams.length) {
+      console.log(`[AnimeAV1] ✓ Resolver remoto confirmó slug "${identity.slug}" y entregó ${streams.length} streams`)
+      return streams
+    }
+    console.warn(`[AnimeAV1] El resolver remoto devolvió slug "${identity.slug}" pero no streams; se activa fallback local`)
+    animeAV1RemoteCache.delete(resolverCacheKey(tmdbId, type, seasonNum))
+  } catch (e) {
+    console.warn(`[AnimeAV1] Resolver remoto falló: ${e.message}; se activa fallback local`)
+  }
+
+  try {
+    const streams = await resolveAnimeAV1Local(tmdbId, type, seasonNum, epNumber)
+    if (streams.length) console.log(`[AnimeAV1] ✓ Fallback local devolvió ${streams.length} streams`)
+    return streams || []
+  } catch (e) {
+    console.error(`[AnimeAV1] Falló el flujo remoto/local: ${e.message}`)
     return []
   }
 }
