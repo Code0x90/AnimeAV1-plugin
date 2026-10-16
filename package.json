@@ -1,13 +1,18 @@
 {
   "name": "nuvio-providers",
-  "version": "1.2.7",
+  "version": "1.2.9",
   "description": "Providers for Nuvio Streaming",
   "scripts": {
     "build": "node build.js",
     "build:watch": "nodemon --watch src -e js,json --exec 'node build.js'",
     "build:provider": "node build.js",
     "test:movie-episode-zero": "node tests/movie-episode-zero.cjs",
-    "test:movie-episode-zero:bundle": "node tests/movie-episode-zero.cjs providers/animeav1.js"
+    "test:movie-episode-zero:bundle": "node tests/movie-episode-zero.cjs providers/animeav1.js",
+    "test:fallback-season": "node tests/fallback-season.cjs",
+    "test": "npm run test:movie-episode-zero && npm run test:movie-episode-zero:bundle && npm run test:fallback-season && npm run test:fallback-season:bundle && npm run test:remote-timeout && npm run test:remote-timeout:bundle",
+    "test:fallback-season:bundle": "node tests/fallback-season.cjs providers/animeav1.js",
+    "test:remote-timeout": "node tests/remote-timeout.cjs",
+    "test:remote-timeout:bundle": "node tests/remote-timeout.cjs providers/animeav1.js"
   },
   "devDependencies": {
     "@babel/core": "^7.24.0",
