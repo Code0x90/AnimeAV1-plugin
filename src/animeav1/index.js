@@ -256,84 +256,88 @@ async function searchAnimesBySpecificURL(url) {
  * @returns {Promise<Array>}
  */
 const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000
+const SEARCH_CACHE_MAX_ENTRIES = 1000
 const animeAV1SearchCache = new Map()
 
-function isStrongSearchMatch(candidates, searchTerm, seasonNum) {
-  if (!Array.isArray(candidates) || !candidates.length) return false
-  let pool = candidates
-  if (seasonNum === 1) {
-    const filtered = candidates.filter((c) => !HIGHER_SEASON_PATTERNS.some((p) => p.test(c.title || '')))
-    if (filtered.length) pool = filtered
+function maintainAnimeAV1SearchCache(now = Date.now()) {
+  for (const [key, entry] of animeAV1SearchCache) {
+    if (now - entry.timestamp >= SEARCH_CACHE_TTL_MS) animeAV1SearchCache.delete(key)
   }
-  const scored = pool.map((candidate) => scoreCandidate(candidate, searchTerm, seasonNum)).sort((a, b) => b.score - a.score)
-  if (!scored.length) return false
-  const best = scored[0]
-  const hasExpectedSeason = seasonNum === 1
-    ? best.candidateSeason === undefined || best.candidateSeason === 1
-    : best.candidateSeason === seasonNum
-  const threshold = seasonNum > 1 ? 65 : 50
-  return best.score >= threshold && (hasExpectedSeason || best.score >= 95)
+  while (animeAV1SearchCache.size >= SEARCH_CACHE_MAX_ENTRIES) {
+    const oldestKey = animeAV1SearchCache.keys().next().value
+    if (oldestKey === undefined) break
+    animeAV1SearchCache.delete(oldestKey)
+  }
+}
+
+function isStrongSearchMatch(candidates, searchTerm, seasonNum) {
+  const match = pickBestMatch(candidates, searchTerm, seasonNum)
+  // For S2+, an unmarked result is not considered strong merely because its
+  // text score is high; AniList must verify its seasonal identity separately.
+  return Boolean(match?.accepted)
 }
 
 /**
- * Busca un anime en AnimeAV1 usando variantes progresivas.
- * Se detiene en cuanto una variante produce un match suficientemente seguro.
- * Los candidatos se cachean brevemente; las URLs HLS/Voe no se cachean aquí.
+ * Search the AnimeAV1 catalog with a bounded progression of equivalent terms.
+ * Cache keys are normalized, cache misses are cached too, and variants stop as
+ * soon as catalog metadata confirms a safe match.
  */
 async function searchAnimeAV1(query, year, seasonNum = 1) {
   const runSearch = async (searchQuery) => {
-    const cacheKey = `${String(searchQuery).trim()}|${year ?? ''}`
+    const normalizedQuery = normalizeTitle(searchQuery)
+    const cacheKey = `${normalizedQuery}|${year ?? ''}`
     const cached = animeAV1SearchCache.get(cacheKey)
-    if (cached && (Date.now() - cached.timestamp) < SEARCH_CACHE_TTL_MS) {
-      console.log(`[AnimeAV1] Cache búsqueda: "${searchQuery}"`)
+    if (cached && Date.now() - cached.timestamp < SEARCH_CACHE_TTL_MS) {
+      // Touch the key to keep frequently-used entries away from the eviction end.
+      animeAV1SearchCache.delete(cacheKey)
+      animeAV1SearchCache.set(cacheKey, cached)
+      console.log(`[AnimeAV1] Caché búsqueda: "${searchQuery}"`)
       return cached.media
     }
     if (cached) animeAV1SearchCache.delete(cacheKey)
 
-    const searchURL = buildSearchURL(searchQuery, undefined, year)
-    console.log(`[AnimeAV1] Buscando: ${searchURL}`)
-    const data = await searchAnimesBySpecificURL(searchURL)
-    if (!data?.media?.length) throw Error("No search results!")
-    animeAV1SearchCache.set(cacheKey, { timestamp: Date.now(), media: data.media })
-    return data.media
+    const data = await searchAnimesBySpecificURL(buildSearchURL(searchQuery, undefined, year))
+    const media = Array.isArray(data?.media) ? data.media : []
+    maintainAnimeAV1SearchCache()
+    animeAV1SearchCache.set(cacheKey, { timestamp: Date.now(), media })
+    return media
   }
-
-  const tryVariant = async (variant) => {
-    try {
-      const media = await runSearch(variant)
-      if (isStrongSearchMatch(media, variant, seasonNum)) {
-        console.log(`[AnimeAV1] Match suficiente en esta búsqueda; se detienen variantes adicionales`)
-      }
-      return { media, strong: isStrongSearchMatch(media, variant, seasonNum) }
-    } catch (e) {
-      if (e.message !== "No search results!") throw e
-      return null
-    }
-  }
-
-  const first = await tryVariant(query)
-  if (first?.strong) return first.media
 
   const sanitized = sanitizeQuery(query)
-  if (sanitized && sanitized !== query) {
-    const second = await tryVariant(sanitized)
-    if (second) {
-      if (second.strong) return second.media
-      // Si ya tenemos candidatos pero ninguno es seguro, no hacemos la búsqueda
-      // genérica de primeras palabras: aporta ruido y no sustituye AniList.
-      return second.media
+  const variants = uniqueLocalTitles([
+    query,
+    sanitized,
+    (sanitized || query).split(' ').filter(Boolean).slice(0, 3).join(' ')
+  ], 3)
+  const aggregate = []
+  const seen = new Set()
+
+  for (const variant of variants) {
+    let rows
+    try {
+      rows = await runSearch(variant)
+    } catch (e) {
+      console.warn(`[AnimeAV1] Variante de búsqueda "${variant}" falló: ${e.message}`)
+      // Empty catalog results are cached as []. Exceptions mean transport/HTTP
+      // failure, so retrying equivalent variants would only multiply requests.
+      throw e
     }
-  }
+    for (const candidate of rows) {
+      const key = candidate?.slug || candidate?.id || normalizeTitle(candidate?.title)
+      if (!key || seen.has(key)) continue
+      seen.add(key)
+      aggregate.push(candidate)
+    }
 
-  const base = sanitized || query
-  const firstWords = base.split(' ').filter(Boolean).slice(0, 3).join(' ')
-  if (firstWords && firstWords !== base) {
-    const third = await tryVariant(firstWords)
-    if (third) return third.media
+    const strongMatch = pickBestMatch(aggregate, query, seasonNum)
+    const exactFullTitle = aggregate.some((candidate) => {
+      if (normalizeTitle(candidate?.title) !== normalizeTitle(query)) return false
+      const candidateSeason = getExplicitSeason(`${candidate?.title || ''} ${candidate?.slug || ''}`)
+      return candidateSeason === undefined || candidateSeason === seasonNum
+    })
+    if (strongMatch?.accepted || exactFullTitle) return aggregate
   }
-
-  if (first) return first.media
-  throw Error("No search results!")
+  return aggregate
 }
 
 // Patrones que indican temporada 2+ en el título del catálogo.
@@ -374,10 +378,25 @@ function getExplicitSeason(title) {
   if (m) return Number(m[1])
   m = value.match(/\b(?:s|t)\s*(\d+)\b/)
   if (m) return Number(m[1])
-  m = value.match(/\bpart\s*(\d+)\b/)
-  if (m) return Number(m[1])
   m = value.match(/\b(\d+)(?:st|nd|rd|th)?\s+temporada\b/)
   if (m) return Number(m[1])
+
+  // Some Japanese/Chinese catalogue aliases use 第三季 / 第三期 instead
+  // of a Latin ordinal. Keep the raw string because normalizeTitle preserves it.
+  const raw = String(title || '')
+  m = raw.match(/第\s*(\d+)\s*(?:期|季)/)
+  if (m) return Number(m[1])
+  m = raw.match(/第\s*([一二三四五六七八九十百]+)\s*(?:期|季)/)
+  if (m) {
+    const digits = { '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10 }
+    const numeral = m[1]
+    if (digits[numeral] != null) return digits[numeral]
+    if (numeral.startsWith('十')) return 10 + (digits[numeral.slice(1)] || 0)
+    if (numeral.includes('十')) {
+      const [tens, ones] = numeral.split('十')
+      return (digits[tens] || 1) * 10 + (digits[ones] || 0)
+    }
+  }
   return undefined
 }
 
@@ -438,79 +457,56 @@ function getAliasExactMatch(target, candidate) {
  */
 function scoreCandidate(candidate, searchTerm, seasonNum) {
   const candidateTitle = candidate?.title || ''
+  // AnimeAV1 sometimes omits the season from the display title but keeps it
+  // in the slug. Use both for season classification, never for title equality.
+  const candidateIdentity = `${candidateTitle} ${candidate?.slug || ''}`.trim()
   const target = normalizeTitle(searchTerm)
   const normalizedCandidate = normalizeTitle(candidateTitle)
   const similarity = wordSimilarity(searchTerm, candidateTitle)
   const aliasExact = getAliasExactMatch(searchTerm, candidateTitle)
-  const explicitSeason = getExplicitSeason(candidateTitle)
+  const explicitSeason = getExplicitSeason(candidateIdentity)
 
   let score = similarity * 60
-
-  // Coincidencia exacta del título completo: máxima confianza de título.
   if (normalizedCandidate === target) score += 30
-
-  // Coincidencia exacta con un alias/título corto explícitamente delimitado.
-  // Es deliberadamente una señal muy fuerte, pero no se activa para simples
-  // subcadenas. Así "Watamote!" puede representar el título largo de TMDB
-  // "WATAMOTE ~No Matter How I Look at It...~" sin relajar el umbral global.
-  if (aliasExact) score = Math.max(score, 100)
+  if (aliasExact && seasonNum === 1) score = Math.max(score, 100)
 
   if (seasonNum > 1) {
     if (explicitSeason === seasonNum) score += 45
     else if (explicitSeason !== undefined) score -= 45
-    // Si el título de búsqueda contiene el número de temporada, una coincidencia
-    // del token numérico también aporta señal aunque el nombre del sitio no use
-    // "Season N" literalmente.
     const targetHasSeasonNumber = new RegExp(`\\b${seasonNum}\\b`).test(target)
     if (targetHasSeasonNumber && new RegExp(`\\b${seasonNum}\\b`).test(normalizedCandidate)) score += 15
   } else if (explicitSeason !== undefined && explicitSeason > 1) {
     score -= 55
   }
-
   return { candidate, score, similarity, candidateSeason: explicitSeason, aliasExact }
 }
 
-/**
- * Elige el mejor candidato sin caer en `pool[0]`.
- * Se exige un umbral mínimo y se devuelve información de confianza para que
- * getStreams pueda probar AniList cuando la búsqueda sea ambigua.
- */
 function pickBestMatch(candidates, searchTerm, seasonNum) {
   if (!Array.isArray(candidates) || candidates.length === 0) return null
-
-  let pool = candidates
-  if (seasonNum === 1) {
-    const filtered = candidates.filter((c) => !HIGHER_SEASON_PATTERNS.some((p) => p.test(c.title || '')))
-    if (filtered.length > 0) pool = filtered
-  }
-
-  const scored = pool
+  const scored = candidates
     .map((candidate) => scoreCandidate(candidate, searchTerm, seasonNum))
     .sort((a, b) => b.score - a.score)
 
-  const best = scored[0]
-  const second = scored[1]
+  // A wrong-season marker must never outrank a markerless candidate that may
+  // later be verified by AniList, nor mask a valid result later in the catalog.
+  const seasonCompatible = scored.filter((entry) =>
+    entry.candidateSeason === undefined || entry.candidateSeason === seasonNum
+  )
+  let pool = seasonCompatible.length ? seasonCompatible : scored
+  if (seasonNum > 1) {
+    const explicit = pool.filter((entry) => entry.candidateSeason === seasonNum && entry.score >= 65)
+    if (explicit.length) pool = explicit
+  }
+  pool.sort((a, b) => b.score - a.score)
+  const best = pool[0]
+  const second = pool[1]
   const gap = second ? best.score - second.score : best.score
-
-  // Para una coincidencia de temporada >1 exigimos una señal de temporada
-  // explícita o una coincidencia muy fuerte del título. Para T1 penalizamos
-  // fuertemente títulos que anuncian otra temporada.
   const hasExpectedSeason = seasonNum === 1
     ? best.candidateSeason === undefined || best.candidateSeason === 1
     : best.candidateSeason === seasonNum
   const threshold = seasonNum > 1 ? 65 : 50
-  const accepted = best.score >= threshold && (hasExpectedSeason || best.score >= 95)
-
-  console.log(`[AnimeAV1] Matching: ${scored.slice(0, 5).map((x) => `"${x.candidate.title}"=${x.score.toFixed(1)}${x.aliasExact ? ' [alias]' : ''}`).join(' | ')}`)
-  console.log(`[AnimeAV1] Mejor match: "${best.candidate.title}" score=${best.score.toFixed(1)} gap=${gap.toFixed(1)}${best.aliasExact ? ' alias=true' : ''} accepted=${accepted}`)
-
-  return {
-    ...best,
-    gap,
-    accepted,
-    aliasExact: best.aliasExact,
-    candidates: scored
-  }
+  const accepted = best.score >= threshold && hasExpectedSeason
+  return { ...best, gap, accepted, candidates: scored }
 }
 
 // ─────────────────────────────────────────────
@@ -994,14 +990,45 @@ async function resolveAnimeAV1LocalLegacy(tmdbId, type, season, episode) {
 
 
 // ─────────────────────────────────────────────
-// Resolver remoto principal + resolución local completa de respaldo (1.2.5)
+// Resolver remoto principal + resolución local completa de respaldo (1.2.9)
 // ─────────────────────────────────────────────
 
 const ANIMEAV1_RESOLVER_URL = "https://animeav1-resolver.onrender.com"
 const RESOLVER_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 const LOCAL_RESOLVER_CACHE_TTL_MS = 24 * 60 * 60 * 1000
+const RESOLVER_CACHE_MAX_ENTRIES = 500
+const RESOLVER_TIMEOUT_MS = 12000
 const animeAV1RemoteCache = new Map()
 const animeAV1LocalCache = new Map()
+
+function maintainResolverCache(cache, ttlMs, now = Date.now()) {
+  for (const [key, entry] of cache) {
+    if (!entry?.timestamp || now - entry.timestamp >= ttlMs) cache.delete(key)
+  }
+  while (cache.size >= RESOLVER_CACHE_MAX_ENTRIES) {
+    const oldestKey = cache.keys().next().value
+    if (oldestKey === undefined) break
+    cache.delete(oldestKey)
+  }
+}
+
+async function fetchWithTimeoutLocal(url, timeoutMs = RESOLVER_TIMEOUT_MS) {
+  let controller
+  try { if (typeof AbortController !== 'undefined') controller = new AbortController() } catch (_) {}
+  let timer
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      try { controller?.abort() } catch (_) {}
+      reject(Error(`Timeout de ${timeoutMs} ms`))
+    }, timeoutMs)
+  })
+  try {
+    const request = fetch(url, controller ? { signal: controller.signal } : undefined)
+    return await Promise.race([request, timeout])
+  } finally {
+    clearTimeout(timer)
+  }
+}
 
 function resolverCacheKey(tmdbId, type, seasonNum) {
   return `${tmdbId}|${type}|${seasonNum}`
@@ -1011,6 +1038,8 @@ async function getRemoteAnimeIdentity(tmdbId, type, seasonNum) {
   const key = resolverCacheKey(tmdbId, type, seasonNum)
   const cached = animeAV1RemoteCache.get(key)
   if (cached && Date.now() - cached.timestamp < RESOLVER_CACHE_TTL_MS) {
+    animeAV1RemoteCache.delete(key)
+    animeAV1RemoteCache.set(key, cached)
     console.log(`[AnimeAV1] Caché del resolver remoto: ${cached.slug}`)
     return cached
   }
@@ -1018,7 +1047,7 @@ async function getRemoteAnimeIdentity(tmdbId, type, seasonNum) {
 
   const url = `${ANIMEAV1_RESOLVER_URL}/resolve?tmdbId=${encodeURIComponent(tmdbId)}&type=${encodeURIComponent(type)}&season=${encodeURIComponent(seasonNum)}`
   console.log(`[AnimeAV1] Resolver remoto: ${url}`)
-  const response = await fetch(url)
+  const response = await fetchWithTimeoutLocal(url)
   if (!response.ok) throw Error(`Resolver remoto HTTP ${response.status}`)
   const data = await response.json()
   if (!data || data.success !== true || typeof data.slug !== 'string' || !data.slug.trim()) {
@@ -1032,6 +1061,7 @@ async function getRemoteAnimeIdentity(tmdbId, type, seasonNum) {
     matchType: data.matchType || 'remote',
     timestamp: Date.now()
   }
+  maintainResolverCache(animeAV1RemoteCache, RESOLVER_CACHE_TTL_MS)
   animeAV1RemoteCache.set(key, identity)
   console.log(`[AnimeAV1] Resolver remoto encontró "${identity.title || identity.slug}" slug=${identity.slug} score=${identity.score ?? '?'} tipo=${identity.matchType}`)
   return identity
@@ -1109,11 +1139,50 @@ async function fetchAniListCandidatesLocal(title) {
   })
   if (!response.ok) throw Error(`AniList HTTP ${response.status}`)
   const json = await response.json()
+  if (Array.isArray(json?.errors) && json.errors.length) throw Error(`AniList GraphQL: ${json.errors[0]?.message || 'error desconocido'}`)
   const rows = json?.data?.Page?.media
   return Array.isArray(rows) ? rows : []
 }
 
-function scoreAniListCandidateLocal(media, sourceTitles, targetYear) {
+function ordinalSeasonLabelLocal(seasonNum) {
+  const n = Math.max(1, Number(seasonNum) || 1)
+  const mod100 = n % 100
+  const suffix = mod100 >= 11 && mod100 <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th')
+  return `${n}${suffix} Season`
+}
+
+function explicitSeasonForMediaLocal(media, targetSeason) {
+  const title = media?.title || {}
+  const values = [title.romaji, title.english, title.native, ...(Array.isArray(media?.synonyms) ? media.synonyms : [])]
+  const seasons = values.map(getExplicitSeason).filter(Number.isInteger)
+  if (targetSeason > 1 && seasons.includes(targetSeason)) return targetSeason
+  return seasons[0]
+}
+
+function uniqueTitleRecordsLocal(values, maxCount = 20) {
+  const result = []
+  const seen = new Map()
+  for (const item of values || []) {
+    const term = String(typeof item === 'string' ? item : item?.term || '').trim()
+    const origin = typeof item === 'string' ? 'tmdb' : (item?.origin || 'tmdb')
+    const key = normalizeTitle(term)
+    if (!key || key.length < 3) continue
+    if (/^(?:season\s*\d+|\d+(?:st|nd|rd|th)?\s+season|part\s*\d+)$/.test(key)) continue
+    if (seen.has(key)) {
+      const index = seen.get(key)
+      if (item?.seasonIdentity && !result[index].seasonIdentity) {
+        result[index] = { ...result[index], seasonIdentity: true, targetSeason: item.targetSeason }
+      }
+      continue
+    }
+    seen.set(key, result.length)
+    result.push({ term, origin, ...(item?.seasonIdentity ? { seasonIdentity: true, targetSeason: item.targetSeason } : {}) })
+    if (result.length >= maxCount) break
+  }
+  return result
+}
+
+function scoreAniListCandidateLocal(media, sourceTitles, baseTitles, targetYear, seasonNum) {
   const title = media?.title || {}
   const named = [
     { value: title.romaji || '', synonym: false },
@@ -1126,6 +1195,7 @@ function scoreAniListCandidateLocal(media, sourceTitles, targetYear) {
   for (const sourceTitle of sourceTitles) {
     const target = normalizeTitle(sourceTitle)
     if (!target) continue
+    const targetTokens = new Set(titleTokens(sourceTitle))
     for (const name of named) {
       const candidate = normalizeTitle(name.value)
       if (!candidate) continue
@@ -1134,7 +1204,6 @@ function scoreAniListCandidateLocal(media, sourceTitles, targetYear) {
       else if (target.length >= 5 && candidate.length >= 5 && (candidate.includes(target) || target.includes(candidate))) {
         score = 82 + (Math.min(target.length, candidate.length) / Math.max(target.length, candidate.length)) * 12
       } else {
-        const targetTokens = new Set(titleTokens(sourceTitle))
         const candidateTokens = new Set(titleTokens(name.value))
         if (!targetTokens.size || !candidateTokens.size) continue
         let overlap = 0
@@ -1150,69 +1219,206 @@ function scoreAniListCandidateLocal(media, sourceTitles, targetYear) {
       }
     }
   }
+
   const year = Number(media?.seasonYear || media?.startDate?.year) || undefined
   let yearBonus = 0
   if (targetYear && year) {
     const diff = Math.abs(year - targetYear)
-    if (diff === 0) yearBonus = 26
+    if (diff === 0) yearBonus = 36
     else if (diff === 1) yearBonus = 12
-    else if (diff === 2) yearBonus = 3
-    else yearBonus = -Math.min(30, (diff - 2) * 5)
+    else if (diff === 2) yearBonus = 2
+    else yearBonus = -Math.min(45, (diff - 2) * 8)
   }
-  return { media, year, titleScore, score: titleScore + yearBonus, matchType }
+  const explicitSeason = explicitSeasonForMediaLocal(media, seasonNum)
+  const baseSimilarity = Math.max(0, ...baseTitles.map((sourceTitle) =>
+    Math.max(0, ...named.map((name) => wordSimilarity(sourceTitle, name.value)))
+  ))
+  let seasonBonus = 0
+  if (seasonNum > 1) {
+    if (explicitSeason === seasonNum) seasonBonus = 220
+    else if (explicitSeason !== undefined) seasonBonus = -220
+    if (media?.format && media.format !== 'TV') seasonBonus -= 100
+  }
+  return { media, year, titleScore, score: titleScore + yearBonus + seasonBonus + baseSimilarity * 30, matchType, explicitSeason, baseSimilarity }
 }
 
-async function resolveAniListIdentityLocal(info, seasonNum, targetYear, extraTitles) {
-  const sourceTitles = uniqueLocalTitles([info?.title, info?.originalTitle, ...(extraTitles || [])], 12)
-  const queries = uniqueLocalTitles([info?.title, info?.originalTitle, ...(extraTitles || [])], 3)
-  if (!queries.length) return undefined
+async function fetchAniListMediaRelationsLocal(mediaId) {
+  const query = `query ($id: Int) {
+    Media(id: $id, type: ANIME) {
+      id
+      relations {
+        edges {
+          relationType
+          node {
+            id
+            idMal
+            type
+            format
+            title { romaji english native }
+            synonyms
+            seasonYear
+            startDate { year month day }
+          }
+        }
+      }
+    }
+  }`
+  const response = await fetch('https://graphql.anilist.co', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    body: JSON.stringify({ query, variables: { id: Number(mediaId) } })
+  })
+  if (!response.ok) throw Error(`AniList relaciones HTTP ${response.status}`)
+  const json = await response.json()
+  if (Array.isArray(json?.errors) && json.errors.length) throw Error(`AniList GraphQL: ${json.errors[0]?.message || 'error desconocido'}`)
+  return json?.data?.Media || undefined
+}
+
+function mediaMatchesBaseSeriesLocal(media, baseTitles) {
+  const title = media?.title || {}
+  const names = [title.romaji, title.english, title.native, ...(media?.synonyms || [])].filter(Boolean)
+  const normalizedBases = new Set(baseTitles.map(normalizeTitle).filter(Boolean))
+  if (names.some((name) => normalizedBases.has(normalizeTitle(name)))) return true
+  return names.some((name) => baseTitles.some((base) =>
+    wordSimilarity(base, name) >= 0.95 && wordSimilarity(name, base) >= 0.75
+  ))
+}
+
+async function verifyAniListSeasonViaRelationsLocal(mediaId, expectedSeason, baseTitles, visited = new Set(), depth = 0) {
+  if (!mediaId || expectedSeason < 2 || depth > 8 || visited.has(Number(mediaId))) return false
+  visited.add(Number(mediaId))
+  const media = await fetchAniListMediaRelationsLocal(mediaId)
+  const edges = media?.relations?.edges
+  if (!Array.isArray(edges)) return false
+  const tvPrequels = edges
+    .filter((edge) => edge?.relationType === 'PREQUEL' && edge?.node?.type === 'ANIME' && edge?.node?.format === 'TV')
+    .map((edge) => edge.node)
+
+  for (const prequel of tvPrequels) {
+    if (expectedSeason === 2 && mediaMatchesBaseSeriesLocal(prequel, baseTitles)) return true
+    const previousSeason = explicitSeasonForMediaLocal(prequel, expectedSeason - 1)
+    if (previousSeason === expectedSeason - 1) return true
+    if (previousSeason !== undefined) continue
+    if (expectedSeason > 2 && prequel.id && await verifyAniListSeasonViaRelationsLocal(
+      prequel.id, expectedSeason - 1, baseTitles, new Set(visited), depth + 1
+    )) return true
+  }
+  return false
+}
+
+async function resolveAniListIdentityLocal(info, seasonNum, targetYear, extraTitles = []) {
+  const baseTitles = uniqueLocalTitles([info?.title, info?.originalTitle], 4)
+  const specificExtras = uniqueLocalTitles((extraTitles || []).filter((value) => getExplicitSeason(value) === seasonNum), 3)
+  const ordinalQueries = seasonNum > 1
+    ? uniqueLocalTitles([
+        ...specificExtras,
+        ...(info?.title ? [`${info.title} ${ordinalSeasonLabelLocal(seasonNum)}`] : []),
+        ...(info?.originalTitle ? [`${info.originalTitle} ${ordinalSeasonLabelLocal(seasonNum)}`] : [])
+      ], 3)
+    : uniqueLocalTitles([...baseTitles, ...(extraTitles || [])], 3)
+  if (!ordinalQueries.length && !baseTitles.length) return undefined
+
   const all = []
-  for (const query of queries) {
+  const seenIds = new Set()
+  const rejectedRelationIds = new Set()
+  const relationVerificationCache = new Map()
+  const verifyCandidateRelations = async (entry) => {
+    const id = Number(entry?.media?.id)
+    if (!id) return false
+    if (relationVerificationCache.has(id)) return relationVerificationCache.get(id)
     try {
-      const rows = await fetchAniListCandidatesLocal(query)
-      for (const row of rows) if (row?.id != null && !all.some((item) => item.id === row.id)) all.push(row)
-    } catch (e) {
-      console.warn(`[AniList] Búsqueda local "${query}" falló: ${e.message}`)
+      const verified = await verifyAniListSeasonViaRelationsLocal(id, seasonNum, baseTitles)
+      relationVerificationCache.set(id, verified)
+      if (!verified) rejectedRelationIds.add(id)
+      return verified
+    } catch (error) {
+      console.warn(`[AniList] No se pudo validar relación del candidato ${id}: ${error.message}`)
+      relationVerificationCache.set(id, false)
+      rejectedRelationIds.add(id)
+      return false
     }
   }
-  if (!all.length) return undefined
+  const fetchOne = async (query) => {
+    let rows = []
+    try {
+      rows = await fetchAniListCandidatesLocal(query)
+    } catch (error) {
+      console.warn(`[AniList] Búsqueda local "${query}" falló: ${error.message}`)
+    }
+    for (const row of rows) {
+      if (row?.id == null || seenIds.has(row.id)) continue
+      seenIds.add(row.id)
+      all.push(row)
+    }
+  }
+  const rankResults = () => {
+    const identityTitles = uniqueLocalTitles([info?.title, info?.originalTitle, ...(extraTitles || [])], 12)
+    const scored = all.map((media) => scoreAniListCandidateLocal(media, identityTitles, baseTitles, targetYear, seasonNum))
+    if (seasonNum <= 1) {
+      const baseMatches = scored.filter((entry) => entry.explicitSeason === undefined || entry.explicitSeason === 1)
+        .sort((a, b) => b.score - a.score || b.titleScore - a.titleScore)
+      return baseMatches[0]?.titleScore >= 52 ? baseMatches[0] : undefined
+    }
 
-  const scored = all.map((media) => scoreAniListCandidateLocal(media, sourceTitles, targetYear)).sort((a, b) => b.score - a.score)
-  const best = scored[0]
-  if (!best || best.titleScore < 52) {
-    console.warn(`[AniList] Ningún título alternativo alcanza confianza suficiente para "${info.title}"`)
+    const explicitMatches = scored.filter((entry) => entry.explicitSeason === seasonNum && entry.baseSimilarity >= 0.45 && (!entry.media?.format || entry.media.format === 'TV'))
+    if (explicitMatches.length) {
+      explicitMatches.sort((a, b) => b.score - a.score || b.titleScore - a.titleScore)
+      return { ...explicitMatches[0], seasonProof: 'explicit-title' }
+    }
+
+    const baseNormalizedTitles = new Set([info?.title, info?.originalTitle].map(normalizeTitle).filter(Boolean))
+    const yearMatches = scored.filter((entry) => {
+      if (rejectedRelationIds.has(Number(entry.media?.id))) return false
+      const mediaTitle = entry.media?.title || {}
+      const primary = normalizeTitle(mediaTitle.romaji || mediaTitle.english || '')
+      const hasTargetYear = targetYear ? entry.year === targetYear : Boolean(entry.year)
+      const distinctTitle = primary && !baseNormalizedTitles.has(primary)
+      return hasTargetYear && distinctTitle && entry.baseSimilarity >= 0.7 && entry.explicitSeason === undefined && (!entry.media?.format || entry.media.format === 'TV')
+    })
+    if (yearMatches.length) {
+      yearMatches.sort((a, b) => b.score - a.score || b.titleScore - a.titleScore)
+      return { ...yearMatches[0], seasonProof: 'year-needs-relations' }
+    }
     return undefined
   }
 
-  // Si AniList devuelve varias entregas de la misma franquicia, seleccionamos
-  // la que mejor corresponda al año de la temporada solicitada.
-  const bestRomaji = best.media?.title?.romaji || ''
-  const base = normalizeTitle(anilistBaseTitle(bestRomaji))
-  const related = scored.filter((entry) => {
-    const romaji = entry.media?.title?.romaji || ''
-    return base && normalizeTitle(anilistBaseTitle(romaji)) === base
-  })
-  let selected = best
-  if (related.length > 1 && targetYear) {
-    related.sort((a, b) => {
-      const da = a.year ? Math.abs(a.year - targetYear) : 9999
-      const db = b.year ? Math.abs(b.year - targetYear) : 9999
-      if (da !== db) return da - db
-      return b.titleScore - a.titleScore
-    })
-    selected = related[0]
-  } else if (related.length > 1 && seasonNum > 1) {
-    related.sort((a, b) => {
-      const da = a.media?.startDate || {}, db = b.media?.startDate || {}
-      const ak = `${da.year || a.year || 9999}-${String(da.month || 1).padStart(2, '0')}-${String(da.day || 1).padStart(2, '0')}`
-      const bk = `${db.year || b.year || 9999}-${String(db.month || 1).padStart(2, '0')}-${String(db.day || 1).padStart(2, '0')}`
-      return ak.localeCompare(bk)
-    })
-    if (related.length >= seasonNum) selected = related[seasonNum - 1]
+  let selected
+  // Query targeted season titles sequentially; stop when an explicit season or
+  // a title/year candidate whose PREQUEL chain proves this season is found.
+  for (const query of ordinalQueries) {
+    await fetchOne(query)
+    selected = rankResults()
+    if (selected?.seasonProof === 'explicit-title') break
+    if (selected?.seasonProof === 'year-needs-relations') {
+      if (await verifyCandidateRelations(selected)) break
+      selected = rankResults()
+    }
+  }
+
+  // Only broaden to the base franchise title if targeted searches didn't yield
+  // a plausible seasonal identity; cap extra requests at two queries.
+  if (!selected && seasonNum > 1) {
+    const fallbackQueries = baseTitles.filter((title) => !ordinalQueries.some((query) => normalizeTitle(query) === normalizeTitle(title)))
+    for (const query of fallbackQueries.slice(0, 2)) {
+      await fetchOne(query)
+      selected = rankResults()
+      if (selected?.seasonProof === 'explicit-title') break
+      if (selected?.seasonProof === 'year-needs-relations') {
+        if (await verifyCandidateRelations(selected)) break
+        selected = rankResults()
+      }
+    }
+  }
+
+  if (!selected) {
+    console.warn(`[AniList] No se identificó con confianza la temporada ${seasonNum} de "${info.title}"`)
+    return undefined
   }
   const media = selected.media
   const title = media?.title || {}
-  console.log(`[AniList] Resolver local: "${title.romaji || title.english || '?'}" year=${selected.year || targetYear || '?'} score=${selected.score.toFixed(1)} match=${selected.matchType}`)
+  let seasonVerified = seasonNum === 1 || selected.explicitSeason === seasonNum
+  if (!seasonVerified && seasonNum > 1 && selected.seasonProof === 'year-needs-relations') seasonVerified = await verifyCandidateRelations(selected)
+  console.log(`[AniList] Resolver local: "${title.romaji || title.english || '?'}" id=${media.id} year=${selected.year || targetYear || '?'} score=${selected.score.toFixed(1)} seasonVerified=${Boolean(seasonVerified)} proof=${selected.seasonProof || 'legacy'} match=${selected.matchType}`)
   return {
     year: selected.year || targetYear,
     romajiTitle: title.romaji || '',
@@ -1220,7 +1426,11 @@ async function resolveAniListIdentityLocal(info, seasonNum, targetYear, extraTit
     nativeTitle: title.native || '',
     synonyms: Array.isArray(media?.synonyms) ? media.synonyms : [],
     matchType: selected.matchType,
-    score: selected.score
+    score: selected.score,
+    anilistId: media.id,
+    explicitSeason: selected.explicitSeason,
+    seasonVerified: Boolean(seasonVerified),
+    seasonNum
   }
 }
 
@@ -1297,13 +1507,24 @@ async function fetchStreamsForSlugLocal(slug, type, epNumber) {
   return []
 }
 
+function acceptSeasonMatchLocal(matchInfo, year, seasonNum, termRecord = {}) {
+  if (!matchInfo || !matchInfo.candidate?.slug || !matchInfo.accepted) {
+    if (!matchInfo || !matchInfo.candidate?.slug || seasonNum <= 1) return false
+    if (!termRecord.seasonIdentity || termRecord.targetSeason !== seasonNum) return false
+    if (matchInfo.candidateSeason !== undefined && matchInfo.candidateSeason !== seasonNum) return false
+    const fullTitleExact = normalizeTitle(matchInfo.candidate?.title) === normalizeTitle(termRecord.term)
+    const fullTokenSimilarity = wordSimilarity(termRecord.term, matchInfo.candidate?.title || '')
+    return Boolean(matchInfo.score >= 85 && (fullTitleExact || fullTokenSimilarity >= 0.85))
+  }
+  return true
+}
+
 async function resolveAnimeAV1LocalFresh(tmdbId, type, seasonNum, epNumber, cacheKey) {
-  console.log(`[AnimeAV1] Fallback local 1.2.5: TMDB ${tmdbId} (${type}) S${seasonNum}E${epNumber}`)
-  const seasonPromise = type === 'movie'
-    ? Promise.resolve({ year: undefined, name: '', airDate: '' })
-    : getTMDBSeasonInfoLocal(tmdbId, seasonNum)
+  console.log(`[AnimeAV1] Fallback local 1.2.9: TMDB ${tmdbId} (${type}) S${seasonNum}E${epNumber}`)
   const [info, seasonInfo, altTitles] = await Promise.all([
-    getTMDBInfo(tmdbId, type), seasonPromise, getTMDBAlternativeTitlesLocal(tmdbId, type)
+    getTMDBInfo(tmdbId, type),
+    type === 'movie' ? Promise.resolve({ year: undefined, name: '', airDate: '' }) : getTMDBSeasonInfoLocal(tmdbId, seasonNum),
+    getTMDBAlternativeTitlesLocal(tmdbId, type)
   ])
   if (!info) {
     console.warn(`[AnimeAV1] TMDB no devolvió información para ${tmdbId}`)
@@ -1313,48 +1534,59 @@ async function resolveAnimeAV1LocalFresh(tmdbId, type, seasonNum, epNumber, cach
     console.warn(`[AnimeAV1] Contenido descartado por filtro de anime: "${info.title}"`)
     return []
   }
-  const seasonYear = type === 'movie' ? info.year : (seasonInfo.year || info.year)
-  const directTerms = uniqueLocalTitles([
-    seasonNum > 1 && type !== 'movie' ? `${info.title} ${seasonNum}` : info.title,
-    info.title, info.originalTitle, seasonInfo.name, ...(altTitles || [])
-  ], 12)
-  const triedTerms = new Set()
-  const triedSlugs = new Set()
 
-  const tryTerms = async (terms, yearToUse, origin) => {
-    for (const termValue of terms) {
-      const term = typeof termValue === 'string' ? termValue : termValue.term
-      const termOrigin = typeof termValue === 'string' ? origin : (termValue.origin || origin)
+  const seasonYear = type === 'movie' ? info.year : (seasonInfo.year || info.year)
+  // The series debut year is not valid proof for S2+; only a season-specific
+  // TMDB year can constrain a higher-season catalog search.
+  const targetSeasonYear = type === 'movie' || seasonNum === 1 ? seasonYear : seasonInfo.year
+  const baseDirectTerms = uniqueTitleRecordsLocal([
+    { term: seasonNum > 1 && type !== 'movie' ? `${info.title} ${seasonNum}` : info.title, origin: 'tmdb-title' },
+    { term: info.title, origin: 'tmdb-title' },
+    { term: info.originalTitle, origin: 'tmdb-original-title' },
+    { term: seasonInfo.name, origin: 'tmdb-season-title' },
+    ...(altTitles || []).map((term) => ({ term, origin: 'tmdb-alternative' }))
+  ], 12)
+
+  const searchedTerms = new Set()
+  const triedSlugs = new Set()
+  let bestAttempt = null
+  let catalogError = null
+  const tryTerms = async (terms, targetYear, phase) => {
+    for (const recordValue of terms) {
+      const record = typeof recordValue === 'string' ? { term: recordValue, origin: phase } : recordValue
+      const term = record.term
       const normalized = normalizeTitle(term)
-      if (!normalized || triedTerms.has(`${normalized}|${yearToUse || ''}`)) continue
-      triedTerms.add(`${normalized}|${yearToUse || ''}`)
-      const yearsToTry = yearToUse ? [yearToUse, undefined] : [undefined]
+      if (!normalized) continue
+      const yearsToTry = targetYear ? [targetYear, undefined] : [undefined]
       for (const year of yearsToTry) {
+        const evidenceKey = record.seasonIdentity ? `|verified-s${record.targetSeason}` : ''
+        const attemptKey = `${normalized}|${year ?? ''}${evidenceKey}`
+        if (searchedTerms.has(attemptKey)) continue
+        searchedTerms.add(attemptKey)
         let candidates
         try {
           candidates = await searchAnimeAV1(term, year, seasonNum)
-        } catch (e) {
-          console.warn(`[AnimeAV1] Búsqueda local "${term}" falló: ${e.message}`)
-          continue
+        } catch (error) {
+          catalogError = error
+          console.warn(`[AnimeAV1] Búsqueda local (${record.origin || phase}) "${term}" año=${year ?? 'ninguno'} falló: ${error.message}`)
+          // A transport/HTTP failure is a catalog-wide failure, not a bad title.
+          // Stop issuing one request per alias when the site is unavailable.
+          return []
         }
         const matchInfo = pickBestMatch(candidates, term, seasonNum)
         if (!matchInfo) continue
-        // En temporadas posteriores, un título fuerte dentro de una búsqueda
-        // filtrada por el año de TMDB también es evidencia válida aunque el
-        // catálogo no escriba literalmente “Season N” en el título.
-        if (!matchInfo.accepted && year && seasonNum > 1 && matchInfo.candidateSeason === undefined && matchInfo.score >= 85) {
-          matchInfo.accepted = true
-          console.log(`[AnimeAV1] Coincidencia aceptada por título + año TMDB: "${matchInfo.candidate.title}" score=${matchInfo.score.toFixed(1)}`)
-        }
+        const accepted = acceptSeasonMatchLocal(matchInfo, year, seasonNum, record)
+        if (!bestAttempt || matchInfo.score > bestAttempt.score) bestAttempt = { term, title: matchInfo.candidate?.title, score: matchInfo.score, accepted }
         const match = matchInfo.candidate
-        if (!matchInfo.accepted || !match?.slug || triedSlugs.has(match.slug)) continue
+        if (!accepted || !match?.slug || triedSlugs.has(match.slug)) continue
         triedSlugs.add(match.slug)
-        console.log(`[AnimeAV1] Match local (${termOrigin}): "${match.title}" slug=${match.slug} score=${matchInfo.score.toFixed(1)} term="${term}"`)
-        const streams = await fetchStreamsForSlugLocal(match.slug, type, epNumber).catch((e) => {
-          console.warn(`[AnimeAV1] Error probando slug "${match.slug}": ${e.message}`)
+        console.log(`[AnimeAV1] Match local (${record.origin || phase}): "${match.title}" slug=${match.slug} score=${matchInfo.score.toFixed(1)} gap=${matchInfo.gap.toFixed(1)} season=${matchInfo.candidateSeason ?? '?'} term="${term}"`)
+        const streams = await fetchStreamsForSlugLocal(match.slug, type, epNumber).catch((error) => {
+          console.warn(`[AnimeAV1] Error probando slug "${match.slug}": ${error.message}`)
           return []
         })
         if (streams.length) {
+          maintainResolverCache(animeAV1LocalCache, LOCAL_RESOLVER_CACHE_TTL_MS)
           animeAV1LocalCache.set(cacheKey, { slug: match.slug, title: match.title, score: matchInfo.score, timestamp: Date.now() })
           console.log(`[AnimeAV1] ✓ Resolver local encontró ${streams.length} streams`)
           return streams
@@ -1365,33 +1597,87 @@ async function resolveAnimeAV1LocalFresh(tmdbId, type, seasonNum, epNumber, cach
     return []
   }
 
-  console.log(`[AnimeAV1] Resolución local por TMDB: títulos=${directTerms.join(' | ')} año=${seasonYear || 'ninguno'}`)
-  let streams = await tryTerms(directTerms, seasonYear, 'TMDB')
-  if (streams.length) return streams
+  let resolution = null
+  let aliInfo
+  if (seasonNum > 1 && type === 'tv') {
+    const targetSpecificTerms = baseDirectTerms.filter((record) => getExplicitSeason(record.term) === seasonNum)
+    // A couple of explicitly seasonal TMDB aliases are cheap and can solve the
+    // case immediately. Do not sweep every language alias before AniList.
+    if (targetSpecificTerms.length) resolution = await tryTerms(targetSpecificTerms.slice(0, 2), targetSeasonYear, 'TMDB temporada')
+    if (catalogError) return []
 
-  console.warn('[AnimeAV1] Búsqueda directa sin streams; se activa cruce AniList/sinónimos')
-  const aliInfo = await resolveAniListIdentityLocal(info, seasonNum, seasonYear, [seasonInfo.name, ...(altTitles || [])])
-  if (!aliInfo) {
-    // Conserva la ruta AniList histórica como última alternativa cuando no se
-    // puede obtener una identidad con títulos y sinónimos estructurados.
-    const legacyInfo = await getAniListInfo(info.title, seasonNum)
-    if (!legacyInfo) return []
-    const legacyTerms = uniqueLocalTitles([legacyInfo.romajiTitle, info.title, info.originalTitle, ...(altTitles || [])], 8)
-    streams = await tryTerms(legacyTerms, legacyInfo.year || seasonYear, 'AniList histórico')
-    if (streams.length) return streams
-    return []
+    if (!resolution) {
+      aliInfo = await resolveAniListIdentityLocal(info, seasonNum, targetSeasonYear, [seasonInfo.name, ...(altTitles || [])]).catch((error) => {
+        console.warn(`[AniList] No se pudo resolver identidad de temporada: ${error.message}`)
+        return undefined
+      })
+    }
+    if (!resolution && aliInfo?.seasonVerified && aliInfo.seasonNum === seasonNum) {
+      const seasonalSynonyms = (aliInfo.synonyms || []).slice().sort((a, b) =>
+        Number(getExplicitSeason(b) === seasonNum) - Number(getExplicitSeason(a) === seasonNum)
+      )
+      const aliasTerms = uniqueTitleRecordsLocal([
+        { term: aliInfo.romajiTitle, origin: 'anilist-season-romaji', seasonIdentity: true, targetSeason: seasonNum },
+        ...seasonalSynonyms.map((term) => ({ term, origin: 'anilist-season-synonym', seasonIdentity: true, targetSeason: seasonNum })),
+        { term: aliInfo.englishTitle, origin: 'anilist-season-english', seasonIdentity: true, targetSeason: seasonNum },
+        { term: aliInfo.nativeTitle, origin: 'anilist-season-native', seasonIdentity: true, targetSeason: seasonNum }
+      ], 6)
+      resolution = await tryTerms(aliasTerms, aliInfo.year || seasonYear, 'AniList temporada verificada')
+      if (catalogError) return []
+    }
+
+    if (!resolution) {
+      const safeFallbackTerms = baseDirectTerms.filter((record) =>
+        ['tmdb-title', 'tmdb-original-title'].includes(record.origin) || getExplicitSeason(record.term) === seasonNum
+      ).sort((a, b) => Number(getExplicitSeason(b.term) === seasonNum) - Number(getExplicitSeason(a.term) === seasonNum))
+      resolution = await tryTerms(safeFallbackTerms, targetSeasonYear, 'fallback TMDB seguro')
+      if (catalogError) return []
+    }
+  } else {
+    resolution = await tryTerms(baseDirectTerms, seasonYear, 'TMDB')
+    if (catalogError) return []
+    if (!resolution) {
+      aliInfo = await resolveAniListIdentityLocal(info, seasonNum, seasonYear, [seasonInfo.name, ...(altTitles || [])]).catch((error) => {
+        console.warn(`[AniList] No se pudo resolver identidad alternativa: ${error.message}`)
+        return undefined
+      })
+      if (aliInfo) {
+        const aliasTerms = uniqueTitleRecordsLocal([
+          { term: aliInfo.romajiTitle, origin: 'anilist-romaji' },
+          { term: aliInfo.englishTitle, origin: 'anilist-english' },
+          { term: aliInfo.nativeTitle, origin: 'anilist-native' },
+          { term: seasonInfo.name, origin: 'tmdb-season-title' },
+          { term: info.title, origin: 'tmdb-title' },
+          { term: info.originalTitle, origin: 'tmdb-original-title' },
+          ...(aliInfo.synonyms || []).map((term) => ({ term, origin: 'anilist-synonym' })),
+          ...(altTitles || []).map((term) => ({ term, origin: 'tmdb-alternative' }))
+        ], 12)
+        resolution = await tryTerms(aliasTerms, aliInfo.year || seasonYear, 'AniList/TMDB')
+        if (catalogError) return []
+      }
+    }
+    if (!resolution) {
+      // Legacy season-by-date lookup is kept only for S1/movies, where it cannot
+      // silently convert an ordinal request into the wrong season.
+      const legacyInfo = await getAniListInfo(info.title, seasonNum).catch(() => undefined)
+      if (legacyInfo) {
+        const legacyTerms = uniqueTitleRecordsLocal([
+          { term: legacyInfo.romajiTitle, origin: 'anilist-romaji-legacy' },
+          { term: info.title, origin: 'tmdb-title' },
+          { term: info.originalTitle, origin: 'tmdb-original-title' },
+          ...(altTitles || []).map((term) => ({ term, origin: 'tmdb-alternative' }))
+        ], 8)
+        resolution = await tryTerms(legacyTerms, legacyInfo.year || seasonYear, 'AniList histórico')
+        if (catalogError) return []
+      }
+    }
   }
 
-  const synonymSet = new Set((aliInfo.synonyms || []).map(normalizeTitle))
-  const aliasTerms = uniqueLocalTitles([
-    aliInfo.romajiTitle, aliInfo.englishTitle, aliInfo.nativeTitle,
-    seasonInfo.name, info.title, info.originalTitle,
-    ...(aliInfo.synonyms || []), ...(altTitles || [])
-  ], 24).map((term) => ({ term, origin: synonymSet.has(normalizeTitle(term)) ? 'sinónimo AniList' : 'AniList/TMDB' }))
-  console.log(`[AnimeAV1] Segunda fase local: AniList ${aliInfo.matchType}; año=${aliInfo.year || seasonYear || 'ninguno'}; títulos=${aliasTerms.map((item) => item.term).join(' | ')}`)
-  streams = await tryTerms(aliasTerms, aliInfo.year || seasonYear, 'AniList/TMDB')
-  if (!streams.length) console.warn(`[AnimeAV1] Resolver local no pudo obtener streams para TMDB ${tmdbId} S${seasonNum}E${epNumber}`)
-  return streams
+  if (!resolution) {
+    console.warn(`[AnimeAV1] No se encontró un slug reproducible con confianza para TMDB ${tmdbId} S${seasonNum}; mejor candidato: ${bestAttempt ? `${bestAttempt.title} (${bestAttempt.score.toFixed(1)}, aceptado=${bestAttempt.accepted})` : 'ninguno'}`)
+    return []
+  }
+  return resolution
 }
 
 async function resolveAnimeAV1Local(tmdbId, type, season, episode) {
@@ -1401,6 +1687,8 @@ async function resolveAnimeAV1Local(tmdbId, type, season, episode) {
   const key = resolverCacheKey(tmdbId, type, seasonNum)
   const cached = animeAV1LocalCache.get(key)
   if (cached && Date.now() - cached.timestamp < LOCAL_RESOLVER_CACHE_TTL_MS) {
+    animeAV1LocalCache.delete(key)
+    animeAV1LocalCache.set(key, cached)
     console.log(`[AnimeAV1] Caché del resolver local: TMDB ${tmdbId} S${seasonNum} -> ${cached.slug}`)
     const streams = await fetchStreamsForSlugLocal(cached.slug, type, epNumber).catch(() => [])
     if (streams.length) return streams
@@ -1414,10 +1702,15 @@ async function resolveAnimeAV1Local(tmdbId, type, season, episode) {
     console.error(`[AnimeAV1] Error del fallback local: ${e.message}`)
     // Ultima oportunidad: el método local previo, conservado sin tocar sus
     // extractores, ayuda a evitar regresiones en casos ya soportados.
-    try { return await resolveAnimeAV1LocalLegacy(tmdbId, type, seasonNum, epNumber) } catch (legacyError) {
-      console.error(`[AnimeAV1] Método local heredado falló: ${legacyError.message}`)
-      return []
+    if (type === 'movie' || seasonNum === 1) {
+      try { return await resolveAnimeAV1LocalLegacy(tmdbId, type, seasonNum, epNumber) } catch (legacyError) {
+        console.error(`[AnimeAV1] Método local heredado falló: ${legacyError.message}`)
+        return []
+      }
     }
+    // For S2+, fail closed: the previous resolver could accept a markerless
+    // result from title/year alone, precisely the ambiguity this fallback fixes.
+    return []
   }
 }
 
@@ -1425,7 +1718,7 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
   if (!tmdbId || !type) return []
   const seasonNum = type === 'movie' ? 1 : (season ? Number(season) : 1)
   const epNumber = type === 'movie' ? 1 : (episode !== undefined ? Number(episode) : 1)
-  console.log(`[AnimeAV1] 1.2.5 Resolviendo: TMDB ${tmdbId} (${type}) S${seasonNum}E${epNumber}`)
+  console.log(`[AnimeAV1] 1.2.9 (remoto principal + fallback local) Resolviendo: TMDB ${tmdbId} (${type}) S${seasonNum}E${epNumber}`)
 
   try {
     const identity = await getRemoteAnimeIdentity(tmdbId, type, seasonNum)
