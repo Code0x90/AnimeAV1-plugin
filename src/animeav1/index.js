@@ -990,7 +990,7 @@ async function resolveAnimeAV1LocalLegacy(tmdbId, type, season, episode) {
 
 
 // ─────────────────────────────────────────────
-// Resolver remoto principal + resolución local completa de respaldo (1.2.9)
+// Resolver remoto principal + resolución local completa de respaldo (1.2.10)
 // ─────────────────────────────────────────────
 
 const ANIMEAV1_RESOLVER_URL = "https://animeav1-resolver.onrender.com"
@@ -1000,6 +1000,39 @@ const RESOLVER_CACHE_MAX_ENTRIES = 500
 const RESOLVER_TIMEOUT_MS = 12000
 const animeAV1RemoteCache = new Map()
 const animeAV1LocalCache = new Map()
+
+// Estas respuestas significan que el resolver terminó correctamente y decidió
+// que no corresponde devolver un slug. En esos casos NO se debe repetir la
+// búsqueda por el camino local, porque puede aceptar un falso positivo.
+const REMOTE_DEFINITIVE_NEGATIVE_REASONS = new Set([
+  'no_confident_match',
+  'not_anime',
+  'tmdb_not_found'
+])
+
+// Errores de entrada/configuración que no se arreglan repitiendo la resolución
+// con el algoritmo local. Los fallos técnicos y las respuestas desconocidas sí
+// permiten el fallback para conservar la disponibilidad.
+const REMOTE_INVALID_REQUEST_REASONS = new Set([
+  'invalid_request',
+  'invalid_parameters',
+  'missing_tmdb_id',
+  'tmdb_id_required',
+  'invalid_type',
+  'unsupported_type'
+])
+
+function createRemoteResolverError(message, { fallbackAllowed = true, reason = 'remote_error' } = {}) {
+  const error = Error(message)
+  error.code = 'ANIMEAV1_REMOTE_RESOLVER_ERROR'
+  error.fallbackAllowed = fallbackAllowed
+  error.reason = reason
+  return error
+}
+
+function getRemoteNegativeReason(data) {
+  return typeof data?.reason === 'string' ? data.reason.trim().toLowerCase() : ''
+}
 
 function maintainResolverCache(cache, ttlMs, now = Date.now()) {
   for (const [key, entry] of cache) {
@@ -1048,10 +1081,63 @@ async function getRemoteAnimeIdentity(tmdbId, type, seasonNum) {
   const url = `${ANIMEAV1_RESOLVER_URL}/resolve?tmdbId=${encodeURIComponent(tmdbId)}&type=${encodeURIComponent(type)}&season=${encodeURIComponent(seasonNum)}`
   console.log(`[AnimeAV1] Resolver remoto: ${url}`)
   const response = await fetchWithTimeoutLocal(url)
-  if (!response.ok) throw Error(`Resolver remoto HTTP ${response.status}`)
-  const data = await response.json()
+  if (!response.ok) {
+    // Algunas capas del servidor pueden adjuntar una respuesta de dominio aun
+    // usando un status HTTP no exitoso. Respetar primero una negativa explícita.
+    let errorData = null
+    try { errorData = await response.json() } catch (_) {}
+    const reason = getRemoteNegativeReason(errorData)
+    if (REMOTE_DEFINITIVE_NEGATIVE_REASONS.has(reason)) {
+      throw createRemoteResolverError(
+        `Resolver remoto: ${reason}${errorData?.tmdbTitle ? ` (${errorData.tmdbTitle})` : ''}`,
+        { fallbackAllowed: false, reason }
+      )
+    }
+    if (REMOTE_INVALID_REQUEST_REASONS.has(reason) || response.status === 400 || response.status === 422) {
+      throw createRemoteResolverError(
+        `Solicitud rechazada por el resolver remoto HTTP ${response.status}${reason ? ` (${reason})` : ''}`,
+        { fallbackAllowed: false, reason: reason || `http_${response.status}` }
+      )
+    }
+    // Timeout (408), límite de peticiones (429), errores de servidor (5xx),
+    // endpoint temporalmente inaccesible y otros fallos de transporte permiten
+    // fallback. La API remota no confirmó que el título no fuera anime.
+    throw createRemoteResolverError(`Resolver remoto HTTP ${response.status}`, {
+      fallbackAllowed: true,
+      reason: reason || `http_${response.status}`
+    })
+  }
+
+  let data
+  try {
+    data = await response.json()
+  } catch (error) {
+    throw createRemoteResolverError(`Respuesta JSON inválida del resolver remoto: ${error.message}`, {
+      fallbackAllowed: true,
+      reason: 'invalid_json'
+    })
+  }
+
+  const reason = getRemoteNegativeReason(data)
+  if (data?.success === false && REMOTE_DEFINITIVE_NEGATIVE_REASONS.has(reason)) {
+    throw createRemoteResolverError(
+      `Resolver remoto: ${reason}${data?.tmdbTitle ? ` (${data.tmdbTitle})` : ''}`,
+      { fallbackAllowed: false, reason }
+    )
+  }
+  if (data?.success === false && REMOTE_INVALID_REQUEST_REASONS.has(reason)) {
+    throw createRemoteResolverError(`Solicitud rechazada por el resolver remoto: ${reason}`, {
+      fallbackAllowed: false,
+      reason
+    })
+  }
   if (!data || data.success !== true || typeof data.slug !== 'string' || !data.slug.trim()) {
-    throw Error(data?.error || 'El resolver remoto no devolvió un slug válido')
+    // success:false desconocido puede representar una API auxiliar caída. No
+    // tratarlo como una negativa definitiva: permitir recuperación local.
+    throw createRemoteResolverError(data?.error || `El resolver remoto no devolvió un slug válido${reason ? ` (reason=${reason})` : ''}`, {
+      fallbackAllowed: true,
+      reason: reason || 'incomplete_response'
+    })
   }
 
   const identity = {
@@ -1520,7 +1606,7 @@ function acceptSeasonMatchLocal(matchInfo, year, seasonNum, termRecord = {}) {
 }
 
 async function resolveAnimeAV1LocalFresh(tmdbId, type, seasonNum, epNumber, cacheKey) {
-  console.log(`[AnimeAV1] Fallback local 1.2.9: TMDB ${tmdbId} (${type}) S${seasonNum}E${epNumber}`)
+  console.log(`[AnimeAV1] Fallback local 1.2.10: TMDB ${tmdbId} (${type}) S${seasonNum}E${epNumber}`)
   const [info, seasonInfo, altTitles] = await Promise.all([
     getTMDBInfo(tmdbId, type),
     type === 'movie' ? Promise.resolve({ year: undefined, name: '', airDate: '' }) : getTMDBSeasonInfoLocal(tmdbId, seasonNum),
@@ -1718,7 +1804,11 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
   if (!tmdbId || !type) return []
   const seasonNum = type === 'movie' ? 1 : (season ? Number(season) : 1)
   const epNumber = type === 'movie' ? 1 : (episode !== undefined ? Number(episode) : 1)
-  console.log(`[AnimeAV1] 1.2.9 (remoto principal + fallback local) Resolviendo: TMDB ${tmdbId} (${type}) S${seasonNum}E${epNumber}`)
+  if (!['movie', 'tv'].includes(type)) {
+    console.warn(`[AnimeAV1] Solicitud inválida: tipo no admitido (${type}); no se ejecuta fallback`)
+    return []
+  }
+  console.log(`[AnimeAV1] 1.2.10 (remoto principal + fallback condicionado) Resolviendo: TMDB ${tmdbId} (${type}) S${seasonNum}E${epNumber}`)
 
   try {
     const identity = await getRemoteAnimeIdentity(tmdbId, type, seasonNum)
@@ -1730,7 +1820,11 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
     console.warn(`[AnimeAV1] El resolver remoto devolvió slug "${identity.slug}" pero no streams; se activa fallback local`)
     animeAV1RemoteCache.delete(resolverCacheKey(tmdbId, type, seasonNum))
   } catch (e) {
-    console.warn(`[AnimeAV1] Resolver remoto falló: ${e.message}; se activa fallback local`)
+    if (e?.fallbackAllowed === false) {
+      console.warn(`[AnimeAV1] Resolver remoto finalizó sin fallback (${e.reason || 'respuesta definitiva'}): ${e.message}`)
+      return []
+    }
+    console.warn(`[AnimeAV1] Resolver remoto falló técnicamente (${e.message}); se activa fallback local`)
   }
 
   try {
