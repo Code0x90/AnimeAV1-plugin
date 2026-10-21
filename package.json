@@ -1,6 +1,6 @@
 {
   "name": "nuvio-providers",
-  "version": "1.2.9",
+  "version": "1.2.10",
   "description": "Providers for Nuvio Streaming",
   "scripts": {
     "build": "node build.js",
@@ -9,10 +9,12 @@
     "test:movie-episode-zero": "node tests/movie-episode-zero.cjs",
     "test:movie-episode-zero:bundle": "node tests/movie-episode-zero.cjs providers/animeav1.js",
     "test:fallback-season": "node tests/fallback-season.cjs",
-    "test": "npm run test:movie-episode-zero && npm run test:movie-episode-zero:bundle && npm run test:fallback-season && npm run test:fallback-season:bundle && npm run test:remote-timeout && npm run test:remote-timeout:bundle",
+    "test": "npm run test:movie-episode-zero && npm run test:movie-episode-zero:bundle && npm run test:fallback-season && npm run test:fallback-season:bundle && npm run test:remote-timeout && npm run test:remote-timeout:bundle && npm run test:remote-fallback-policy && npm run test:remote-fallback-policy:bundle",
     "test:fallback-season:bundle": "node tests/fallback-season.cjs providers/animeav1.js",
     "test:remote-timeout": "node tests/remote-timeout.cjs",
-    "test:remote-timeout:bundle": "node tests/remote-timeout.cjs providers/animeav1.js"
+    "test:remote-timeout:bundle": "node tests/remote-timeout.cjs providers/animeav1.js",
+    "test:remote-fallback-policy": "node tests/remote-fallback-policy.cjs",
+    "test:remote-fallback-policy:bundle": "node tests/remote-fallback-policy.cjs providers/animeav1.js"
   },
   "devDependencies": {
     "@babel/core": "^7.24.0",
