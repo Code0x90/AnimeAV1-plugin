@@ -1263,9 +1263,9 @@ function resolveAnimeAV1LocalLegacy(tmdbId, type, season, episode) {
     });
 }
 // ─────────────────────────────────────────────
-// Resolver remoto principal + resolución local completa de respaldo (1.2.10)
+// Resolver remoto principal + resolución local completa de respaldo (1.2.11)
 // ─────────────────────────────────────────────
-var ANIMEAV1_RESOLVER_URL = "https://animeav1-resolver.onrender.com";
+var ANIMEAV1_RESOLVER_URL = "https://mh0ri3dvat.apps.bot-hosting.cloud";
 var RESOLVER_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 var LOCAL_RESOLVER_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 var RESOLVER_CACHE_MAX_ENTRIES = 500;
@@ -2214,7 +2214,7 @@ function resolveAnimeAV1LocalFresh(tmdbId, type, seasonNum, epNumber, cacheKey) 
         return __generator(this, function (_b) {
             switch (_b.label) {
                 case 0:
-                    console.log("[AnimeAV1] Fallback local 1.2.10: TMDB ".concat(tmdbId, " (").concat(type, ") S").concat(seasonNum, "E").concat(epNumber));
+                    console.log("[AnimeAV1] Fallback local 1.2.11: TMDB ".concat(tmdbId, " (").concat(type, ") S").concat(seasonNum, "E").concat(epNumber));
                     return [4 /*yield*/, Promise.all([
                             getTMDBInfo(tmdbId, type),
                             type === 'movie' ? Promise.resolve({ year: undefined, name: '', airDate: '' }) : getTMDBSeasonInfoLocal(tmdbId, seasonNum),
@@ -2529,7 +2529,7 @@ exports.getStreams = function (tmdbId, type, season, episode) {
                         console.warn("[AnimeAV1] Solicitud inv\u00E1lida: tipo no admitido (".concat(type, "); no se ejecuta fallback"));
                         return [2 /*return*/, []];
                     }
-                    console.log("[AnimeAV1] 1.2.10 (remoto principal + fallback condicionado) Resolviendo: TMDB ".concat(tmdbId, " (").concat(type, ") S").concat(seasonNum, "E").concat(epNumber));
+                    console.log("[AnimeAV1] 1.2.11 (remoto principal + fallback condicionado) Resolviendo: TMDB ".concat(tmdbId, " (").concat(type, ") S").concat(seasonNum, "E").concat(epNumber));
                     _a.label = 1;
                 case 1:
                     _a.trys.push([1, 4, , 5]);
