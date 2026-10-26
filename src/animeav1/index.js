@@ -990,10 +990,10 @@ async function resolveAnimeAV1LocalLegacy(tmdbId, type, season, episode) {
 
 
 // ─────────────────────────────────────────────
-// Resolver remoto principal + resolución local completa de respaldo (1.2.10)
+// Resolver remoto principal + resolución local completa de respaldo (1.2.11)
 // ─────────────────────────────────────────────
 
-const ANIMEAV1_RESOLVER_URL = "https://animeav1-resolver.onrender.com"
+const ANIMEAV1_RESOLVER_URL = "https://mh0ri3dvat.apps.bot-hosting.cloud"
 const RESOLVER_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 const LOCAL_RESOLVER_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 const RESOLVER_CACHE_MAX_ENTRIES = 500
@@ -1606,7 +1606,7 @@ function acceptSeasonMatchLocal(matchInfo, year, seasonNum, termRecord = {}) {
 }
 
 async function resolveAnimeAV1LocalFresh(tmdbId, type, seasonNum, epNumber, cacheKey) {
-  console.log(`[AnimeAV1] Fallback local 1.2.10: TMDB ${tmdbId} (${type}) S${seasonNum}E${epNumber}`)
+  console.log(`[AnimeAV1] Fallback local 1.2.11: TMDB ${tmdbId} (${type}) S${seasonNum}E${epNumber}`)
   const [info, seasonInfo, altTitles] = await Promise.all([
     getTMDBInfo(tmdbId, type),
     type === 'movie' ? Promise.resolve({ year: undefined, name: '', airDate: '' }) : getTMDBSeasonInfoLocal(tmdbId, seasonNum),
@@ -1808,7 +1808,7 @@ exports.getStreams = async function (tmdbId, type, season, episode) {
     console.warn(`[AnimeAV1] Solicitud inválida: tipo no admitido (${type}); no se ejecuta fallback`)
     return []
   }
-  console.log(`[AnimeAV1] 1.2.10 (remoto principal + fallback condicionado) Resolviendo: TMDB ${tmdbId} (${type}) S${seasonNum}E${epNumber}`)
+  console.log(`[AnimeAV1] 1.2.11 (remoto principal + fallback condicionado) Resolviendo: TMDB ${tmdbId} (${type}) S${seasonNum}E${epNumber}`)
 
   try {
     const identity = await getRemoteAnimeIdentity(tmdbId, type, seasonNum)
