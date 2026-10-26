@@ -1,4 +1,4 @@
-# AnimeAV1 Nuvio Provider 1.2.10
+# AnimeAV1 Nuvio Provider 1.2.11
 
 Esta versión utiliza el resolver remoto como primera opción. Si el remoto confirma una negativa definitiva (`no_confident_match`, `not_anime` o `tmdb_not_found`), no se activa la búsqueda local. El fallback se reserva para fallos técnicos (timeout, red, HTTP 429/5xx, JSON inválido o respuesta desconocida) y para un slug remoto que no produce streams reproducibles.
 
@@ -13,7 +13,7 @@ npm run build -- animeav1
 
 ## Comprobar con ADB
 
-Durante la prueba debe aparecer `[AnimeAV1] 1.2.10 (remoto principal + fallback condicionado) Resolviendo`. Si el remoto devuelve una negativa definitiva, aparecerá `Resolver remoto finalizó sin fallback`; ante fallos técnicos aparecerá `se activa fallback local` y registros de `Fallback local 1.2.10`.
+Durante la prueba debe aparecer `[AnimeAV1] 1.2.11 (remoto principal + fallback condicionado) Resolviendo`. Si el remoto devuelve una negativa definitiva, aparecerá `Resolver remoto finalizó sin fallback`; ante fallos técnicos aparecerá `se activa fallback local` y registros de `Fallback local 1.2.11`.
 
 ## Películas publicadas como episodio 0
 
@@ -27,7 +27,7 @@ Ejecutar las pruebas del código fuente y del bundle que carga Nuvio, incluidas 
 npm test
 ```
 
-## Cambios en 1.2.10
+## Cambios en 1.2.11
 
 - Se mantiene el resolver remoto como ruta principal y se condiciona el fallback por tipo de resultado. No hay fallback para `no_confident_match`, `not_anime`, `tmdb_not_found`, peticiones inválidas (HTTP 400/422) o tipos no admitidos.
 - El fallback local verifica la temporada solicitada con títulos explícitos de AniList o su cadena de relaciones `PREQUEL`; ya no acepta temporadas S2+ solo por parecido de título y año.
@@ -42,3 +42,10 @@ npm test
 ```bash
 npm test
 ```
+
+
+## Cambio en 1.2.11
+
+- Se cambió la URL base del resolver remoto a `https://mh0ri3dvat.apps.bot-hosting.cloud`.
+- Se conserva el comportamiento de resolución remota y fallback condicionado; `resolver.js` no se modifica.
+- El nuevo host no pudo comprobarse desde este entorno, por lo que se debe validar su endpoint `/resolve` desde Nuvio o con una petición HTTP real.

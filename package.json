@@ -1,6 +1,6 @@
 {
   "name": "nuvio-providers",
-  "version": "1.2.10",
+  "version": "1.2.11",
   "description": "Providers for Nuvio Streaming",
   "scripts": {
     "build": "node build.js",
